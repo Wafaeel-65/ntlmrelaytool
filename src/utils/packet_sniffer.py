@@ -11,11 +11,7 @@ import os
 
 class PacketSniffer:
     def __init__(self, interface: str = None):
-        # Configure logging first
-        self.logger = logging.getLogger(__name__)
-        if not self.logger.handlers:
-            self.logger.addHandler(logging.StreamHandler())
-            self.logger.setLevel(logging.INFO)
+        self.logger = logging.getLogger(__name__) # Get logger instance
         
         # Check for admin privileges
         if not self._is_admin():

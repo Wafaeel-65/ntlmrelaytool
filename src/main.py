@@ -95,8 +95,7 @@ def main():
                     
             except KeyboardInterrupt:
                 logger.info("Stopping capture...")
-                if sniffer:
-                    sniffer.stop()
+                # Removed sniffer.stop() call - rely on daemon thread exit
             except Exception as e:
                 logger.error(f"Failed to start capture: {str(e)}")
                 
