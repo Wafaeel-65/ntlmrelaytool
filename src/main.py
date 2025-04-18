@@ -47,7 +47,7 @@ def main():
     logger = setup_logging()
     
     parser = argparse.ArgumentParser(description='NTLM Relay Tool')
-    parser.add_argument('command', choices=['capture', 'stop_capture', 'relay', 'crack', 'list-interfaces'],
+    parser.add_argument('command', choices=['capture', 'stop_capture', 'relay', 'crack', 'list-interfaces', 'list-results'],
                        help='Command to execute')
     parser.add_argument('--interface', help='Network interface to capture on')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
@@ -126,6 +126,26 @@ def main():
             logger.info("Starting password cracking...")
             # Add password cracking implementation here
             logger.info("Password cracking not implemented yet")
+
+        elif args.command == 'list-results':
+            logger.info("Listing captured results from database...")
+            try:
+                results = db.execute_query("SELECT ID_RESULTAT, ID_PLUGIN, DATE_RESULTAT, STATUT, DETAILS FROM RESULTAT ORDER BY DATE_RESULTAT DESC")
+                
+                if results:
+                    print("\nCaptured Results:")
+                    print("=" * 60)
+                    print(f"{'ID':<5} {'PluginID':<10} {'Timestamp':<25} {'Status':<10} {'Details'}")
+                    print("-" * 60)
+                    for row in results:
+                        timestamp = datetime.strptime(row[2], '%Y-%m-%d %H:%M:%S.%f').strftime('%Y-%m-%d %H:%M:%S') if isinstance(row[2], str) else row[2]
+                        print(f"{row[0]:<5} {row[1]:<10} {str(timestamp):<25} {row[3]:<10} {row[4]}")
+                    print("=" * 60)
+                else:
+                    logger.info("No results found in the database.")
+                    
+            except Exception as e:
+                logger.error(f"Failed to retrieve results from database: {e}")
     
     except Exception as e:
         logger.error(f"An error occurred: {e}")
