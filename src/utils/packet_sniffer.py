@@ -7,6 +7,7 @@ import sys
 import re
 import platform
 import ctypes
+import os
 
 class PacketSniffer:
     def __init__(self, interface: str = None):
