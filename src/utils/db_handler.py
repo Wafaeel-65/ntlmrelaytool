@@ -10,6 +10,27 @@ sys.path.insert(0, project_root)
 
 from src.modules.storage.models import Plugin, Utilisateur, Execute, Resultat
 
+def adapt_datetime(val):
+    """Convert datetime to SQLite TEXT"""
+    return val.strftime("%Y-%m-%d %H:%M:%S") if val else None
+
+def convert_datetime(val):
+    """Convert SQLite TEXT to datetime"""
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, bytes):
+        val = val.decode()
+    try:
+        return datetime.strptime(val, "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        return None
+
+# Register the adapter and converter
+sqlite3.register_adapter(datetime, adapt_datetime)
+sqlite3.register_converter("timestamp", convert_datetime)
+
 class DatabaseHandler:
     def __init__(self, db_path: str = "ntlm_relay.db"):
         self.db_path = db_path
@@ -78,7 +99,7 @@ class DatabaseHandler:
 
     def connect(self) -> None:
         try:
-            self.connection = sqlite3.connect(self.db_path)
+            self.connection = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
             self.cursor = self.connection.cursor()
         except sqlite3.Error as e:
             raise Exception(f"Database connection failed: {e}")
