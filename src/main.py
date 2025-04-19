@@ -17,8 +17,15 @@ from src.modules.exploit.relay import Relay
 
 def is_admin():
     try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
+        # Windows check
+        if os.name == 'nt':
+            return ctypes.windll.shell32.IsUserAnAdmin()
+        # Linux/Unix check
+        else:
+            return os.geteuid() == 0
+    except AttributeError: # Handle cases where geteuid might not be available (shouldn't happen on Linux)
+        return False
+    except Exception: # Catch other potential errors like ctypes issues on non-Windows
         return False
 
 def list_interfaces():
