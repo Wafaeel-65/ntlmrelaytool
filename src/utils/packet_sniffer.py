@@ -1,5 +1,4 @@
 from scapy.all import sniff, IP, TCP, conf
-from scapy.arch import get_windows_if_list
 from typing import Optional, Dict, List
 import threading
 import logging
@@ -37,23 +36,31 @@ class PacketSniffer:
         """Get the correct interface name for the current platform"""
         if not interface:
             raise ValueError("Network interface name is required")
-            
+
         try:
             if platform.system() == 'Windows':
+                # Import only on Windows
+                from scapy.arch import get_windows_if_list
                 interfaces = get_windows_if_list()
                 for iface in interfaces:
                     if interface.lower() in iface['name'].lower() or interface.lower() in iface['description'].lower():
                         self.logger.info(f"Found matching interface: {iface['name']} ({iface['description']})")
                         return iface['name']
-                        
+
                 available = "\n".join([f"- {i['name']} ({i['description']})" for i in interfaces])
                 raise ValueError(f"Interface '{interface}' not found.\nAvailable interfaces:\n{available}")
             else:
-                # For non-Windows systems, return the interface name as-is
+                # For non-Windows systems, assume the provided name is correct
+                # You might want to add validation here using platform-specific tools if needed
+                self.logger.info(f"Using provided interface name for non-Windows system: {interface}")
                 return interface
+        except ImportError:
+             self.logger.error("Failed to import Windows-specific module on a non-Windows system. This might indicate an issue.")
+             # Fallback for non-windows if import somehow fails elsewhere
+             return interface
         except Exception as e:
             self.logger.error(f"Error finding interface: {e}")
-            if "Npcap is not installed" in str(e):
+            if platform.system() == 'Windows' and "Npcap is not installed" in str(e):
                 self.logger.error("Please install Npcap from https://npcap.com/")
             raise
 
