@@ -56,7 +56,9 @@ def main():
     parser = argparse.ArgumentParser(description='NTLM Relay Tool')
     parser.add_argument('command', choices=['capture', 'stop_capture', 'relay', 'crack', 'list-interfaces', 'list-results'],
                        help='Command to execute')
-    parser.add_argument('--interface', help='Network interface to capture on')
+    parser.add_argument('--interface', help='Network interface to capture/relay on')
+    parser.add_argument('--port', type=int, default=445, help='Port to listen on (default: 445)')
+    parser.add_argument('--target', help='Target host for relay attack')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
@@ -118,13 +120,19 @@ def main():
                     continue
                     
         elif args.command == 'relay':
+            if not args.target:
+                logger.error("Target is required for relay mode. Use --target to specify the target host.")
+                return
+                
             logger.info("Starting relay attack...")
-            relay = Relay()
+            relay = Relay(interface=args.interface or '0.0.0.0', port=args.port)
             try:
-                relay.start_relay()
-                logger.info("Relay server started. Press Ctrl+C to stop.")
+                relay.start_relay(target=args.target)
+                logger.info(f"Relay server started. Listening on port {args.port}. Target: {args.target}")
+                logger.info("Press Ctrl+C to stop.")
                 while True:
-                    pass
+                    import time
+                    time.sleep(1)
             except KeyboardInterrupt:
                 logger.info("Stopping relay...")
                 relay.stop_relay()
