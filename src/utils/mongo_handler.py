@@ -152,9 +152,24 @@ class MongoDBHandler:
         """Retrieve capture records with optional query"""
         try:
             if self.config['embedded_mode']:
-                if query:
-                    return self.captures.search(Query().fragment(query))
-                return self.captures.all()
+                # Add doc_id as _id for compatibility with list_results
+                all_docs = self.captures.all()
+                results = []
+                for doc in all_docs:
+                    doc_dict = dict(doc) # Convert TinyDB Document to dict
+                    doc_dict['_id'] = doc.doc_id # Add _id field
+                    # Apply query filtering manually if needed
+                    if query:
+                        match = True
+                        for key, value in query.items():
+                            if key not in doc_dict or doc_dict[key] != value:
+                                match = False
+                                break
+                        if match:
+                            results.append(doc_dict)
+                    else:
+                        results.append(doc_dict)
+                return results
             else:
                 return list(self.captures.find(query or {}))
         except Exception as e:
