@@ -1,3 +1,8 @@
+import warnings
+from cryptography.utils import CryptographyDeprecationWarning
+warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
+warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning)
+
 import argparse
 import os
 import sys

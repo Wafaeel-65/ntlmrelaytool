@@ -1,7 +1,11 @@
-from scapy.all import sniff, IP, TCP, conf
 import warnings
 from cryptography.utils import CryptographyDeprecationWarning
 warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
+warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning)
+
+from scapy.all import sniff, IP, TCP, conf
+conf.verb = 0  # Disable Scapy verbosity completely
+
 from typing import Optional, Dict, List
 import threading
 import logging
@@ -22,9 +26,6 @@ class PacketSniffer:
         if not self._is_admin():
             raise PermissionError("Administrator privileges required for packet capture")
             
-        # Set verbosity level for Scapy
-        conf.verb = 0
-        
         self.interface = self._get_interface_name(interface)
         self.running = False
         self.capture_thread: Optional[threading.Thread] = None
@@ -108,8 +109,6 @@ class PacketSniffer:
     def _capture_packets(self):
         """Capture packets using scapy"""
         try:
-            # Disable scapy warnings
-            conf.verb = 0
             sniff(
                 iface=self.interface,
                 filter="tcp port 445 or tcp port 139",
