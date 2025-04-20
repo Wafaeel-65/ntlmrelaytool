@@ -37,11 +37,40 @@ class DatabaseHandler:
         self.connection: Optional[sqlite3.Connection] = None
         self.cursor: Optional[sqlite3.Cursor] = None
         
+    def connect(self) -> bool:
+        """Establish database connection"""
+        try:
+            if not self.connection:
+                self.connection = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
+                self.cursor = self.connection.cursor()
+                return self.initialize_database()
+            return True
+        except sqlite3.Error as e:
+            print(f"Database connection failed: {e}")
+            return False
+
+    def disconnect(self) -> None:
+        if self.connection:
+            self.connection.close()
+            self.connection = None
+            self.cursor = None
+
+    def test_connection(self) -> bool:
+        """Test if database connection is active"""
+        try:
+            if self.connection:
+                self.cursor.execute("SELECT 1")
+                return True
+            return False
+        except (sqlite3.Error, AttributeError):
+            return False
+
     def initialize_database(self) -> bool:
         """Initialize the SQLite database with required tables."""
         try:
-            if not self.is_connected():
-                self.connect()
+            if not self.test_connection():
+                if not self.connect():
+                    raise Exception("Could not establish database connection")
             
             # Create tables in correct order (parent tables first)
             create_tables = [
@@ -88,39 +117,11 @@ class DatabaseHandler:
             print(f"Database initialization failed: {e}")
             return False
 
-    def is_connected(self) -> bool:
-        try:
-            if (self.connection):
-                self.connection.execute("SELECT 1")
-                return True
-            return False
-        except sqlite3.Error:
-            return False
-
-    def connect(self) -> None:
-        try:
-            self.connection = sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES)
-            self.cursor = self.connection.cursor()
-        except sqlite3.Error as e:
-            raise Exception(f"Database connection failed: {e}")
-
-    def disconnect(self) -> None:
-        if self.connection:
-            self.connection.close()
-            self.connection = None
-            self.cursor = None
-
-    def __enter__(self):
-        self.connect()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.disconnect()
-
     def execute_query(self, query: str, params: Tuple = ()) -> Optional[List[Any]]:
         try:
-            if not self.is_connected():
-                self.connect()
+            if not self.test_connection():
+                if not self.connect():
+                    raise Exception("Could not establish database connection")
             self.cursor.execute(query, params)
             self.connection.commit()
             return self.cursor.fetchall()
@@ -166,62 +167,33 @@ class DatabaseHandler:
         except sqlite3.Error as e:
             raise Exception(f"Failed to get user plugins: {e}")
 
-    def test_connection(self):
-        """Test database connection with a simple query."""
-        try:
-            if not self.connection or not self.is_connected():
-                self.connect()
-            self.cursor.execute("SELECT 1")
-            self.cursor.fetchone()
-            return True
-        except sqlite3.Error:
-            return False
-        except Exception as e:
-            print(f"Error testing connection: {e}")
-            return False
-
     def store_plugin(self, nom_plugin, description, version, ntlm_key):
-        """
-        Store a plugin's information in the database.
-
-        Args:
-            nom_plugin (str): The name of the plugin.
-            description (str): A brief description of the plugin.
-            version (str): The version of the plugin.
-            ntlm_key (str): The NTLM key associated with the plugin.
-
-        Returns:
-            bool: True if the plugin was successfully stored, False otherwise.
-        """
+        """Store plugin data with automatic reconnection"""
         try:
-            if not self.connection:
-                raise Exception("Database connection is not active.")
+            if not self.test_connection():
+                if not self.connect():
+                    raise Exception("Could not establish database connection")
+                    
             query = """INSERT INTO PLUGIN 
                       (NOM_PLUGIN, DATE_CREATION, DESCRIPTION, VERSION, NTLM_KEY) 
                       VALUES (?, ?, ?, ?, ?)"""
             values = (nom_plugin, datetime.now(), description, version, ntlm_key)
             self.cursor.execute(query, values)
             self.connection.commit()
-            return True
+            return self.cursor.lastrowid
+            
         except sqlite3.Error as err:
             print(f"Error storing plugin: {err}")
-            return False
+            self.disconnect()  # Force reconnection on next attempt
+            return None
 
     def store_result(self, id_plugin, status, details):
-        """
-        Store the result of a plugin execution in the database.
-
-        Args:
-            id_plugin (int): The ID of the plugin associated with the result.
-            status (str): The status of the result (e.g., 'success', 'failure').
-            details (str): Additional details or information about the result.
-
-        Returns:
-            bool: True if the result was stored successfully, False otherwise.
-        """
+        """Store result data with automatic reconnection"""
         try:
-            if not self.connection:
-                raise Exception("Database connection is not active.")
+            if not self.test_connection():
+                if not self.connect():
+                    raise Exception("Could not establish database connection")
+                    
             query = """INSERT INTO RESULTAT 
                       (ID_PLUGIN, DATE_RESULTAT, STATUT, DETAILS) 
                       VALUES (?, ?, ?, ?)"""
@@ -229,8 +201,10 @@ class DatabaseHandler:
             self.cursor.execute(query, values)
             self.connection.commit()
             return True
+            
         except sqlite3.Error as err:
             print(f"Error storing result: {err}")
+            self.disconnect()  # Force reconnection on next attempt
             return False
 
     def record_execution(self, id_utilisateur, id_plugin):
@@ -245,8 +219,10 @@ class DatabaseHandler:
             bool: True if the execution was successfully recorded, False otherwise.
         """
         try:
-            if not self.connection:
-                raise Exception("Database connection is not active.")
+            if not self.test_connection():
+                if not self.connect():
+                    raise Exception("Could not establish database connection")
+                    
             query = """INSERT INTO EXECUTE 
                       (ID_UTILISATEUR, ID_PLUGIN, DATE_EXECUTION) 
                       VALUES (?, ?, ?)"""
@@ -256,6 +232,7 @@ class DatabaseHandler:
             return True
         except sqlite3.Error as err:
             print(f"Error recording execution: {err}")
+            self.disconnect()  # Force reconnection on next attempt
             return False
         except Exception as e:
             print(f"Error: {e}")

@@ -9,6 +9,7 @@ import ctypes
 import os
 from src.modules.capture.parser import parse_hashes
 from src.utils.db_handler import DatabaseHandler
+from src.utils.mongo_handler import MongoDBHandler
 
 class PacketSniffer:
     def __init__(self, interface: str = None):
@@ -24,7 +25,17 @@ class PacketSniffer:
         self.interface = self._get_interface_name(interface)
         self.running = False
         self.capture_thread: Optional[threading.Thread] = None
+        
+        # Initialize both databases
         self.db_handler = DatabaseHandler()
+        try:
+            self.mongo_handler = MongoDBHandler()
+            self.use_mongo = True
+            self.logger.info("Using MongoDB for primary storage")
+        except Exception as e:
+            self.logger.warning(f"MongoDB not available, falling back to SQLite: {e}")
+            self.use_mongo = False
+            
         self.ntlm_sessions = {}  # Track NTLM sessions
 
     def _is_admin(self) -> bool:
@@ -85,6 +96,10 @@ class PacketSniffer:
         self.running = False
         if self.capture_thread:
             self.capture_thread.join()
+        if self.db_handler:
+            self.db_handler.disconnect()
+        if hasattr(self, 'mongo_handler') and self.mongo_handler:
+            self.mongo_handler.disconnect()
         self.logger.info("Packet capture stopped")
 
     def _capture_packets(self):
@@ -140,7 +155,28 @@ class PacketSniffer:
     def _store_hash(self, hash_info: Dict):
         """Store captured hash information in database"""
         try:
-            # Create plugin record for the capture
+            # Try MongoDB first if available
+            if self.use_mongo:
+                try:
+                    capture_id = self.mongo_handler.store_capture({
+                        'source': hash_info['source'],
+                        'destination': hash_info['destination'],
+                        'username': hash_info.get('username'),
+                        'domain': hash_info.get('domain'),
+                        'hostname': hash_info.get('hostname'),
+                        'ntlm_type': hash_info.get('type'),
+                        'payload': hash_info['payload']
+                    })
+                    if capture_id:
+                        self.logger.info("Successfully stored capture in MongoDB")
+                        return
+                except Exception as e:
+                    self.logger.error(f"MongoDB storage failed, falling back to SQLite: {e}")
+            
+            # Fallback to SQLite
+            if not self.db_handler.is_connected():
+                self.db_handler.connect()
+
             plugin_data = {
                 'nom_plugin': 'NTLM Capture',
                 'description': f'Captured from {hash_info["source"]}',
@@ -148,14 +184,15 @@ class PacketSniffer:
                 'ntlm_key': hash_info['payload']
             }
             
-            # Store in database
-            self.db_handler.store_plugin(**plugin_data)
+            plugin_id = self.db_handler.store_plugin(**plugin_data)
             
-            # Log additional details if available
-            if hash_info.get('username'):
-                self.logger.info(f"Captured credentials for user: {hash_info['username']}")
-            if hash_info.get('domain'):
-                self.logger.info(f"Domain: {hash_info['domain']}")
+            if plugin_id and hash_info.get('username'):
+                result_data = {
+                    'id_plugin': plugin_id,
+                    'status': 'SUCCESS',
+                    'details': f'Captured credentials - User: {hash_info["username"]}, Domain: {hash_info.get("domain", "N/A")}'
+                }
+                self.db_handler.store_result(**result_data)
                 
         except Exception as e:
             self.logger.error(f"Error storing hash: {e}")

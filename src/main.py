@@ -14,6 +14,7 @@ from src.utils.db_handler import DatabaseHandler
 from src.utils.hash_handler import process_ntlm_hash
 from src.utils.packet_sniffer import start_capture
 from src.modules.exploit.relay import Relay
+from src.utils.mongo_handler import MongoDBHandler
 
 def is_admin():
     try:
@@ -50,6 +51,46 @@ def setup_logging():
     )
     return logging.getLogger(__name__)
 
+def list_results(mongo_handler, sql_handler, logger):
+    """List captured results from both databases"""
+    try:
+        # Try MongoDB first
+        if mongo_handler:
+            mongo_captures = mongo_handler.get_captures()
+            if mongo_captures:
+                print("\nMongoDB Captures:")
+                print("=" * 80)
+                print(f"{'ID':<24} {'Timestamp':<25} {'Source IP':<15} {'Username':<15} {'Domain'}")
+                print("-" * 80)
+                for capture in mongo_captures:
+                    timestamp = capture.get('timestamp', '').strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"{str(capture['_id']):<24} {timestamp:<25} {capture.get('source', ''):<15} {capture.get('username', ''):<15} {capture.get('domain', '')}")
+                print("=" * 80)
+        
+        # Get SQLite results
+        results = sql_handler.execute_query(
+            """SELECT r.ID_RESULTAT, r.ID_PLUGIN, r.DATE_RESULTAT, r.STATUT, r.DETAILS, p.NTLM_KEY 
+               FROM RESULTAT r 
+               JOIN PLUGIN p ON r.ID_PLUGIN = p.ID_PLUGIN 
+               ORDER BY r.DATE_RESULTAT DESC"""
+        )
+        
+        if results:
+            print("\nSQLite Captures:")
+            print("=" * 80)
+            print(f"{'ID':<5} {'PluginID':<10} {'Timestamp':<25} {'Status':<10} {'Details'}")
+            print("-" * 80)
+            for row in results:
+                timestamp = row[2].strftime('%Y-%m-%d %H:%M:%S') if row[2] else ''
+                print(f"{row[0]:<5} {row[1]:<10} {timestamp:<25} {row[3]:<10} {row[4]}")
+            print("=" * 80)
+            
+        if not mongo_captures and not results:
+            logger.info("No captures found in either database.")
+            
+    except Exception as e:
+        logger.error(f"Failed to retrieve results: {e}")
+
 def main():
     logger = setup_logging()
     
@@ -77,16 +118,28 @@ def main():
         list_interfaces()
         return
         
-    # Initialize database connection
+    # Initialize databases
     db = DatabaseHandler()
     try:
         db.initialize_database()
-        logger.info("Database initialized successfully")
+        logger.info("SQLite database initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize SQLite database: {e}")
         return
+
+    # Initialize MongoDB if available
+    mongo_db = None
+    try:
+        mongo_db = MongoDBHandler()
+        logger.info("MongoDB connection established")
+    except Exception as e:
+        logger.warning(f"MongoDB not available: {e}")
     
     try:
+        if args.command == 'list-results':
+            list_results(mongo_db, db, logger)
+            return
+            
         if args.command == 'capture':
             if not args.interface:
                 logger.error("Interface is required for capture mode")
@@ -142,30 +195,12 @@ def main():
             # Add password cracking implementation here
             logger.info("Password cracking not implemented yet")
 
-        elif args.command == 'list-results':
-            logger.info("Listing captured results from database...")
-            try:
-                results = db.execute_query("SELECT ID_RESULTAT, ID_PLUGIN, DATE_RESULTAT, STATUT, DETAILS FROM RESULTAT ORDER BY DATE_RESULTAT DESC")
-                
-                if results:
-                    print("\nCaptured Results:")
-                    print("=" * 60)
-                    print(f"{'ID':<5} {'PluginID':<10} {'Timestamp':<25} {'Status':<10} {'Details'}")
-                    print("-" * 60)
-                    for row in results:
-                        timestamp = datetime.strptime(row[2], '%Y-%m-%d %H:%M:%S.%f').strftime('%Y-%m-%d %H:%M:%S') if isinstance(row[2], str) else row[2]
-                        print(f"{row[0]:<5} {row[1]:<10} {str(timestamp):<25} {row[3]:<10} {row[4]}")
-                    print("=" * 60)
-                else:
-                    logger.info("No results found in the database.")
-                    
-            except Exception as e:
-                logger.error(f"Failed to retrieve results from database: {e}")
-    
     except Exception as e:
         logger.error(f"An error occurred: {e}")
     finally:
         db.disconnect()
+        if mongo_db:
+            mongo_db.disconnect()
         logger.info("Tool execution completed")
 
 if __name__ == "__main__":
