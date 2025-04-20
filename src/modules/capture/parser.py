@@ -1,6 +1,7 @@
 import re
 from typing import Dict, List, Optional
 import binascii
+import struct
 
 def extract_ntlm_info(payload: str) -> Optional[Dict]:
     """
@@ -20,45 +21,67 @@ def extract_ntlm_info(payload: str) -> Optional[Dict]:
         if b'NTLMSSP' not in payload_bytes:
             return None
             
-        # Determine NTLM message type
-        if b'NTLMSSP\x00\x01\x00\x00\x00' in payload_bytes:
-            msg_type = 1  # Negotiate
-        elif b'NTLMSSP\x00\x02\x00\x00\x00' in payload_bytes:
-            msg_type = 2  # Challenge
-        elif b'NTLMSSP\x00\x03\x00\x00\x00' in payload_bytes:
-            msg_type = 3  # Authenticate
-        else:
+        # Find NTLMSSP offset
+        ntlmssp_offset = payload_bytes.find(b'NTLMSSP')
+        if ntlmssp_offset == -1:
             return None
             
-        # Extract domain and username from Type 3 message
-        if msg_type == 3:
-            # Find username in payload (Unicode encoded)
-            username_match = re.search(b'(?<=\x00\x00)\x00([^\x00]+?\x00){2,}', payload_bytes)
-            if username_match:
-                username = username_match.group(0).decode('utf-16-le').strip('\x00')
-            else:
-                username = None
-                
-            # Find domain in payload
-            domain_match = re.search(b'DSI(?:\x00.|.[^\x00])*(?:\x00\x00|\xff\xff)', payload_bytes)
-            if domain_match:
-                domain = domain_match.group(0).decode('utf-16-le', errors='ignore').strip('\x00')
-            else:
-                domain = None
-                
-            return {
-                'type': msg_type,
-                'username': username,
-                'domain': domain,
-                'payload': payload,
-                'complete_hash': True
-            }
-            
-        return {
+        # Extract NTLM message type
+        msg_type = struct.unpack("<I", payload_bytes[ntlmssp_offset+8:ntlmssp_offset+12])[0]
+        
+        # Base result
+        result = {
             'type': msg_type,
             'payload': payload,
             'complete_hash': False
         }
+            
+        # Extract additional info from Type 3 (Authentication) messages
+        if msg_type == 3:
+            try:
+                # Get domain and username using offset/length fields
+                ntlm_header = payload_bytes[ntlmssp_offset:]
+                
+                # Extract domain info
+                domain_len = struct.unpack("<H", ntlm_header[28:30])[0]
+                domain_offset = struct.unpack("<I", ntlm_header[32:36])[0]
+                if domain_len > 0 and domain_offset > 0:
+                    domain = ntlm_header[domain_offset:domain_offset+domain_len]
+                    try:
+                        result['domain'] = domain.decode('utf-16-le')
+                    except:
+                        result['domain'] = domain.decode('ascii', errors='ignore')
+                
+                # Extract username info
+                username_len = struct.unpack("<H", ntlm_header[36:38])[0]
+                username_offset = struct.unpack("<I", ntlm_header[40:44])[0]
+                if username_len > 0 and username_offset > 0:
+                    username = ntlm_header[username_offset:username_offset+username_len]
+                    try:
+                        result['username'] = username.decode('utf-16-le')
+                    except:
+                        result['username'] = username.decode('ascii', errors='ignore')
+                
+                # Extract host info
+                host_len = struct.unpack("<H", ntlm_header[44:46])[0]
+                host_offset = struct.unpack("<I", ntlm_header[48:52])[0]
+                if host_len > 0 and host_offset > 0:
+                    hostname = ntlm_header[host_offset:host_offset+host_len]
+                    try:
+                        result['hostname'] = hostname.decode('utf-16-le')
+                    except:
+                        result['hostname'] = hostname.decode('ascii', errors='ignore')
+                
+                # Mark as complete hash if we have the required fields
+                if 'username' in result:
+                    result['complete_hash'] = True
+                    
+            except Exception as e:
+                print(f"Warning: Error extracting Type 3 fields: {e}")
+                # Continue even if extraction fails - we still have the basic info
+                pass
+                
+        return result
         
     except Exception as e:
         print(f"Error parsing NTLM payload: {e}")

@@ -116,8 +116,22 @@ class PacketSniffer:
                         for hash_info in parsed_hashes:
                             if hash_info.get('complete_hash'):
                                 self._store_hash(hash_info)
+                                
+                            # Log appropriate message based on NTLM type
+                            msg_type = hash_info.get('type')
+                            if msg_type == 1:
+                                self.logger.info(f"Captured NTLM Negotiate from {packet[IP].src}")
+                            elif msg_type == 2:
+                                self.logger.info(f"Captured NTLM Challenge from {packet[IP].src}")
+                            elif msg_type == 3:
+                                self.logger.info(f"Captured NTLM Auth from {packet[IP].src}")
+                                if hash_info.get('username'):
+                                    self.logger.info(f"Username: {hash_info['username']}")
+                                if hash_info.get('domain'):
+                                    self.logger.info(f"Domain: {hash_info['domain']}")
+                                if hash_info.get('hostname'):
+                                    self.logger.info(f"Hostname: {hash_info['hostname']}")
                             
-                        self.logger.info(f"Captured NTLM hash from {packet[IP].src}")
                         return ntlm_data
             except Exception as e:
                 self.logger.error(f"Error processing packet: {e}")
