@@ -1,4 +1,7 @@
 from scapy.all import sniff, IP, TCP, conf
+import warnings
+from cryptography.utils import CryptographyDeprecationWarning
+warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
 from typing import Optional, Dict, List
 import threading
 import logging
