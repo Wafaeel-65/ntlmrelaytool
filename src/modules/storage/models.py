@@ -11,6 +11,17 @@ class Target:
         self.hash = hash
         self.created_at = datetime.now()
 
+class NTLMCapture:
+    def __init__(self, source: str, destination: str, username: Optional[str] = None,
+                 domain: Optional[str] = None, ntlm_type: int = 0, payload: str = None):
+        self.source = source
+        self.destination = destination
+        self.username = username
+        self.domain = domain
+        self.ntlm_type = ntlm_type
+        self.payload = payload
+        self.capture_time = datetime.now()
+
 class Credential:
     def __init__(self, username: str, hash: str, id: Optional[int] = None):
         self.id = id

