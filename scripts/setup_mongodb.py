@@ -1,4 +1,4 @@
-from pymongo import MongoClient, ASCENDING
+from pymongo import MongoClient, ASCENDING, TEXT
 import sys
 import os
 import logging
@@ -23,30 +23,78 @@ def setup_mongodb():
         config = ConfigParser()
         config.read(config_path)
         
+        # Build connection string
+        connection_string = f"mongodb://{config['mongodb']['host']}:{config['mongodb']['port']}"
+        if config['mongodb'].get('username') and config['mongodb'].get('password'):
+            auth = f"{config['mongodb']['username']}:{config['mongodb']['password']}@"
+            connection_string = f"mongodb://{auth}{config['mongodb']['host']}:{config['mongodb']['port']}"
+        
         # Connect to MongoDB
-        client = MongoClient(f"mongodb://{config['mongodb']['host']}:{config['mongodb']['port']}")
+        client = MongoClient(connection_string)
         db = client[config['mongodb']['database']]
         
-        # Create collections
-        captures = db.captures
-        plugins = db.plugins
-        results = db.results
+        # Create collections with validation
+        db.create_collection('captures', validator={
+            '$jsonSchema': {
+                'bsonType': 'object',
+                'required': ['timestamp', 'source'],
+                'properties': {
+                    'timestamp': {'bsonType': 'date'},
+                    'source': {'bsonType': 'string'},
+                    'username': {'bsonType': 'string'},
+                    'domain': {'bsonType': 'string'},
+                    'hash': {'bsonType': 'string'}
+                }
+            }
+        })
+        
+        db.create_collection('plugins', validator={
+            '$jsonSchema': {
+                'bsonType': 'object',
+                'required': ['nom_plugin', 'created_at'],
+                'properties': {
+                    'nom_plugin': {'bsonType': 'string'},
+                    'created_at': {'bsonType': 'date'},
+                    'description': {'bsonType': 'string'},
+                    'version': {'bsonType': 'string'}
+                }
+            }
+        })
+        
+        db.create_collection('results', validator={
+            '$jsonSchema': {
+                'bsonType': 'object',
+                'required': ['timestamp', 'plugin_id'],
+                'properties': {
+                    'timestamp': {'bsonType': 'date'},
+                    'plugin_id': {'bsonType': 'string'},
+                    'status': {'bsonType': 'string'},
+                    'details': {'bsonType': 'string'}
+                }
+            }
+        })
         
         # Create indexes
+        captures = db.captures
         captures.create_index([("timestamp", ASCENDING)])
         captures.create_index([("source", ASCENDING)])
         captures.create_index([("username", ASCENDING)])
         captures.create_index([("domain", ASCENDING)])
+        captures.create_index([("hash", ASCENDING)])
         
+        plugins = db.plugins
         plugins.create_index([("created_at", ASCENDING)])
-        plugins.create_index([("nom_plugin", ASCENDING)])
+        plugins.create_index([("nom_plugin", ASCENDING)], unique=True)
+        plugins.create_index([("description", TEXT)])
         
+        results = db.results
         results.create_index([("timestamp", ASCENDING)])
         results.create_index([("plugin_id", ASCENDING)])
+        results.create_index([("status", ASCENDING)])
         
         logger.info("MongoDB setup completed successfully")
         logger.info(f"Database: {config['mongodb']['database']}")
-        logger.info(f"Collections created: captures, plugins, results")
+        logger.info(f"Collections created with validation schemas")
         logger.info("Indexes created for better query performance")
         
         return True
