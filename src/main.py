@@ -58,76 +58,93 @@ def setup_logging():
 
 def list_results(mongo_handler, sql_handler, logger):
     """List captured results from both databases"""
-    found_mongo = False
-    found_sqlite = False
-    
-    # --- MongoDB ---
-    logger.info("Querying MongoDB for captures...")
     try:
+        # --- MongoDB Captures ---
+        logger.info("Querying MongoDB for captures...")
         if mongo_handler:
-            # Use a specific query to ensure we only get captures (e.g., based on ntlm_type if stored)
-            # Or just get all documents if the collection is dedicated to captures
-            mongo_captures = mongo_handler.get_captures() 
+            try:
+                # Test MongoDB connection first
+                try:
+                    mongo_handler.db.command('ping')
+                    logger.debug("MongoDB connection test successful")
+                except Exception as ping_e:
+                    logger.error(f"MongoDB connection test failed: {ping_e}")
+                    raise
+
+                # Check if captures collection exists
+                collections = mongo_handler.db.list_collection_names()
+                logger.debug(f"Found MongoDB collections: {collections}")
+                if 'captures' not in collections:
+                    logger.warning("No 'captures' collection found in MongoDB")
+                    mongo_captures = []
+                else:
+                    # Get all captures from MongoDB with explicit cursor to list conversion
+                    cursor = mongo_handler.captures.find({})
+                    mongo_captures = list(cursor)
+                    logger.debug(f"MongoDB query returned {len(mongo_captures)} captures")
+                    
+                    # Log first capture for debugging if available
+                    if mongo_captures:
+                        logger.debug(f"First capture sample: {mongo_captures[0]}")
+                
+                if mongo_captures:
+                    print("\nMongoDB Captures:")
+                    print("=" * 80)
+                    print(f"{'ID':<24} {'Timestamp':<25} {'Source IP':<15} {'Username':<15} {'Domain'}")
+                    print("-" * 80)
+                    for capture in mongo_captures:
+                        # Get values with fallbacks
+                        id_str = str(capture.get('_id', 'N/A'))
+                        timestamp_val = capture.get('timestamp', 'N/A')
+                        if isinstance(timestamp_val, datetime):
+                            timestamp_str = timestamp_val.strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            timestamp_str = str(timestamp_val)
+                        source = capture.get('source', 'N/A')
+                        username = capture.get('username', 'N/A')
+                        domain = capture.get('domain', 'N/A')
+                        
+                        print(f"{id_str:<24} {timestamp_str:<25} {source:<15} {username:<15} {domain}")
+                    print("=" * 80)
+                else:
+                    logger.info("No captures found in MongoDB")
+            except Exception as mongo_e:
+                logger.error(f"Error querying MongoDB: {mongo_e}", exc_info=True)
+        else:
+            logger.warning("MongoDB handler not available")
+
+        # --- SQLite Results ---
+        logger.info("Querying SQLite for results...")
+        try:
+            sql_results = sql_handler.execute_query(
+                """SELECT r.ID_RESULTAT, r.DATE_RESULTAT, r.STATUT, r.DETAILS, p.NOM_PLUGIN, p.NTLM_KEY
+                   FROM RESULTAT r
+                   LEFT JOIN PLUGIN p ON r.ID_PLUGIN = p.ID_PLUGIN
+                   ORDER BY r.DATE_RESULTAT DESC"""
+            )
             
-            if mongo_captures:
-                found_mongo = True
-                logger.info(f"Found {len(mongo_captures)} captures in MongoDB.")
-                print("\nMongoDB Captures:")
+            if sql_results:
+                print("\nSQLite Results:")
                 print("=" * 80)
-                print(f"{'ID':<24} {'Timestamp':<25} {'Source IP':<15} {'Username':<15} {'Domain'}")
+                print(f"{'ID':<5} {'Timestamp':<25} {'Type':<15} {'Status':<10} {'Details/Hash'}")
                 print("-" * 80)
-                for capture in mongo_captures:
-                    timestamp_val = capture.get('timestamp')
-                    timestamp_str = timestamp_val.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp_val, datetime) else str(timestamp_val)
-                    print(f"{str(capture.get('_id', 'N/A')):<24} {timestamp_str:<25} {capture.get('source', 'N/A'):<15} {capture.get('username', 'N/A'):<15} {capture.get('domain', 'N/A')}")
+                for row in sql_results:
+                    res_id, date_res, status, details, plugin_name, ntlm_key = row
+                    timestamp = date_res.strftime('%Y-%m-%d %H:%M:%S') if isinstance(date_res, datetime) else str(date_res)
+                    entry_type = "Capture" if plugin_name == "NTLM Capture" else "Result"
+                    
+                    # For captures, show the NTLM hash, otherwise show details
+                    display_value = ntlm_key if entry_type == "Capture" else details
+                    print(f"{res_id:<5} {timestamp:<25} {entry_type:<15} {status or 'N/A':<10} {display_value or 'N/A'}")
                 print("=" * 80)
             else:
-                logger.info("No captures found in MongoDB.")
-        else:
-            logger.warning("MongoDB handler not available, skipping MongoDB query.")
-            
-    except Exception as e:
-        logger.error(f"Failed to retrieve results from MongoDB: {e}", exc_info=True)
-
-    # --- SQLite ---
-    logger.info("Querying SQLite for results and captures...")
-    try:
-        # Query RESULTAT joined with PLUGIN to get details
-        # This assumes captures stored via fallback create a PLUGIN entry named 'NTLM Capture'
-        sql_results = sql_handler.execute_query(
-            """SELECT r.ID_RESULTAT, r.DATE_RESULTAT, r.STATUT, r.DETAILS, p.NOM_PLUGIN, p.NTLM_KEY 
-               FROM RESULTAT r 
-               LEFT JOIN PLUGIN p ON r.ID_PLUGIN = p.ID_PLUGIN 
-               ORDER BY r.DATE_RESULTAT DESC"""
-        )
-        
-        if sql_results:
-            found_sqlite = True
-            logger.info(f"Found {len(sql_results)} entries in SQLite RESULTAT table.")
-            print("\nSQLite Results/Captures:")
-            print("=" * 80)
-            print(f"{'ID':<5} {'Timestamp':<25} {'Type':<15} {'Status':<10} {'Details/Payload'}")
-            print("-" * 80)
-            for row in sql_results:
-                res_id, date_res, status, details, plugin_name, ntlm_key = row
-                timestamp_str = date_res.strftime('%Y-%m-%d %H:%M:%S') if isinstance(date_res, datetime) else str(date_res or 'N/A')
+                logger.info("No results found in SQLite database")
                 
-                # Determine if it's a capture or a result based on plugin name
-                entry_type = "Capture" if plugin_name == 'NTLM Capture' else "Result"
-                # Show NTLM key (payload) for captures, otherwise show details
-                details_payload = ntlm_key if entry_type == "Capture" else details 
-                
-                print(f"{res_id:<5} {timestamp_str:<25} {entry_type:<15} {status or 'N/A':<10} {details_payload or 'N/A'}")
-            print("=" * 80)
-        else:
-            logger.info("No results or captures found in SQLite.")
-            
-    except Exception as e:
-        logger.error(f"Failed to retrieve results from SQLite: {e}", exc_info=True)
+        except Exception as sql_e:
+            logger.error(f"Error querying SQLite: {sql_e}", exc_info=True)
 
-    # --- Summary ---
-    if not found_mongo and not found_sqlite:
-        logger.info("No captures or results found in either database.")
+    except Exception as e:
+        logger.error(f"Error in list_results: {e}", exc_info=True)
 
 def main():
     logger = setup_logging()
