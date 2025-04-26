@@ -3,7 +3,7 @@ from cryptography.utils import CryptographyDeprecationWarning
 warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
 warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning)
 
-from scapy.all import sniff, IP, TCP, conf
+from scapy.all import sniff, IP, TCP, UDP, conf
 conf.verb = 0  # Disable Scapy verbosity completely
 
 from typing import Optional, Dict, List
@@ -109,9 +109,11 @@ class PacketSniffer:
     def _capture_packets(self):
         """Capture packets using scapy"""
         try:
+            # Updated filter to capture more NTLM-related traffic
             sniff(
                 iface=self.interface,
-                filter="tcp port 445 or tcp port 139",
+                # Added ports 137, 138 for NetBIOS and port 389 for LDAP
+                filter="tcp port 445 or tcp port 139 or udp port 137 or udp port 138 or tcp port 389",
                 prn=self._packet_callback,
                 store=0,
                 stop_filter=lambda _: not self.running
@@ -122,34 +124,40 @@ class PacketSniffer:
 
     def _packet_callback(self, packet):
         """Process captured packets"""
-        if IP in packet and TCP in packet:
+        if IP in packet:
             try:
-                # Look for NTLM authentication packets
-                if self._is_ntlm_auth(packet):
-                    ntlm_data = self._extract_ntlm_data(packet)
-                    if ntlm_data:
-                        # Parse the NTLM data
-                        parsed_hashes = parse_hashes(ntlm_data)
-                        for hash_info in parsed_hashes:
-                            if hash_info.get('complete_hash'):
-                                self._store_hash(hash_info)
+                # Check for both TCP and UDP packets
+                if (TCP in packet or UDP in packet) and hasattr(packet.payload.payload, 'load'):
+                    payload_data = bytes(packet.payload.payload.load)
+                    
+                    # Look for NTLM authentication packets
+                    if self._is_ntlm_auth(packet):
+                        ntlm_data = self._extract_ntlm_data(packet)
+                        if ntlm_data:
+                            # Parse the NTLM data
+                            parsed_hashes = parse_hashes(ntlm_data)
+                            for hash_info in parsed_hashes:
+                                if hash_info.get('complete_hash'):
+                                    self._store_hash(hash_info)
+                                    self.logger.info(f"Captured NTLM hash from {packet[IP].src} -> {packet[IP].dst}")
                                 
-                            # Log appropriate message based on NTLM type
-                            msg_type = hash_info.get('type')
-                            if msg_type == 1:
-                                self.logger.info(f"Captured NTLM Negotiate from {packet[IP].src}")
-                            elif msg_type == 2:
-                                self.logger.info(f"Captured NTLM Challenge from {packet[IP].src}")
-                            elif msg_type == 3:
-                                self.logger.info(f"Captured NTLM Auth from {packet[IP].src}")
-                                if hash_info.get('username'):
-                                    self.logger.info(f"Username: {hash_info['username']}")
-                                if hash_info.get('domain'):
-                                    self.logger.info(f"Domain: {hash_info['domain']}")
-                                if hash_info.get('hostname'):
-                                    self.logger.info(f"Hostname: {hash_info['hostname']}")
+                                # Enhanced logging for authentication attempts
+                                msg_type = hash_info.get('type')
+                                if msg_type == 1:
+                                    self.logger.info(f"[+] NTLM Negotiate from {packet[IP].src}")
+                                elif msg_type == 2:
+                                    self.logger.info(f"[+] NTLM Challenge from {packet[IP].src}")
+                                elif msg_type == 3:
+                                    self.logger.info(f"[+] NTLM Authentication attempt from {packet[IP].src}")
+                                    if hash_info.get('username'):
+                                        self.logger.info(f"    Username: {hash_info['username']}")
+                                    if hash_info.get('domain'):
+                                        self.logger.info(f"    Domain: {hash_info['domain']}")
+                                    if hash_info.get('hostname'):
+                                        self.logger.info(f"    Hostname: {hash_info['hostname']}")
+                                    self.logger.info("-" * 50)
                             
-                        return ntlm_data
+                            return ntlm_data
             except Exception as e:
                 self.logger.error(f"Error processing packet: {e}")
         return None
@@ -202,7 +210,13 @@ class PacketSniffer:
     def _is_ntlm_auth(self, packet) -> bool:
         """Check if packet contains NTLM authentication"""
         try:
-            payload = bytes(packet[TCP].payload)
+            if TCP in packet:
+                payload = bytes(packet[TCP].payload)
+            elif UDP in packet:
+                payload = bytes(packet[UDP].payload)
+            else:
+                return False
+                
             return (b'NTLMSSP' in payload and 
                    (b'NTLMSSP\x00\x01\x00\x00\x00' in payload or  # Type 1
                     b'NTLMSSP\x00\x02\x00\x00\x00' in payload or  # Type 2
@@ -213,7 +227,13 @@ class PacketSniffer:
     def _extract_ntlm_data(self, packet) -> Optional[Dict]:
         """Extract NTLM authentication data from packet"""
         try:
-            payload = bytes(packet[TCP].payload)
+            if TCP in packet:
+                payload = bytes(packet[TCP].payload)
+            elif UDP in packet:
+                payload = bytes(packet[UDP].payload)
+            else:
+                return None
+                
             if b'NTLMSSP' in payload:
                 return {
                     'source': packet[IP].src,
