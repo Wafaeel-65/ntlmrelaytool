@@ -7,8 +7,8 @@ import platform
 import subprocess
 import json
 import psutil
+from datetime import datetime
 from socketserver import ThreadingMixIn, UDPServer, TCPServer, BaseRequestHandler
-from src.utils.db_handler import DatabaseHandler
 from src.modules.storage.models import Plugin, Resultat
 
 class LLMNRPoisoner(ThreadingMixIn, UDPServer):
@@ -57,7 +57,10 @@ class ResponderCapture:
         self.auth_ports = auth_ports
         self.running = False
         self.servers = []
-        self.db_handler = DatabaseHandler()
+        
+        # Initialize MongoDB handler only
+        from src.utils.mongo_handler import MongoDBHandler
+        self.mongo_handler = MongoDBHandler()
         
         # Handle interface name resolution
         self.interface = self._resolve_interface(interface)
@@ -229,24 +232,38 @@ class ResponderCapture:
         self.logger.info("All poisoning servers stopped")
 
     def handle_poisoned_request(self, request_type, source_ip, request_name):
-        """Handle poisoned requests and store them"""
+        """Handle poisoned requests and store them in MongoDB"""
         try:
             self.logger.info(f"Received {request_type} request from {source_ip} for name {request_name}")
-            plugin_id = self.db_handler.store_plugin(
-                nom_plugin=f'{request_type} Poison',
-                description=f'Poisoned {request_type} request for name {request_name}',
-                version='1.0',
-                source_ip=source_ip,
-                request_name=request_name
-            )
             
-            if plugin_id:
+            # Store in MongoDB
+            capture_data = {
+                'type': request_type,
+                'source': source_ip,
+                'request_name': request_name,
+                'interface': self.interface,
+                'timestamp': datetime.now()
+            }
+            capture_id = self.mongo_handler.store_capture(capture_data)
+            
+            if capture_id:
+                self.logger.debug(f"Successfully stored capture with ID: {capture_id}")
+                
+                # Store result
                 result_data = {
-                    'id_plugin': plugin_id,
+                    'capture_id': capture_id,
+                    'timestamp': datetime.now(),
                     'status': 'SUCCESS',
                     'details': f'{request_type} request poisoned successfully'
                 }
-                self.db_handler.store_result(**result_data)
+                result_id = self.mongo_handler.store_result(result_data)
+                
+                if result_id:
+                    self.logger.debug(f"Successfully stored result with ID: {result_id}")
+                else:
+                    self.logger.warning("Failed to store result in MongoDB")
+            else:
+                self.logger.warning("Failed to store capture in MongoDB")
                 
         except Exception as e:
             self.logger.error(f"Error handling poisoned request: {e}")

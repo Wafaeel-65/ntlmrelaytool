@@ -1,55 +1,33 @@
-import warnings
-from cryptography.utils import CryptographyDeprecationWarning
-warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
-warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning)
-
-from scapy.all import sniff, IP, TCP, UDP, conf
-conf.verb = 0  # Disable Scapy verbosity completely
-
-from typing import Optional, Dict, List
-import threading
 import logging
-import sys
-import re
+import socket
+import struct
+import threading
 import platform
-import ctypes
-import os
-from src.modules.capture.parser import parse_hashes
-from src.utils.db_handler import DatabaseHandler
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from scapy.all import sniff, IP, UDP, TCP, Raw
 from src.utils.mongo_handler import MongoDBHandler
+from src.modules.storage.models import NTLMCapture
+from src.utils.hash_handler import parse_hashes
+
 
 class PacketSniffer:
     def __init__(self, interface: str = None):
         self.logger = logging.getLogger(__name__)
-        
-        # Check for admin privileges
-        if not self._is_admin():
-            raise PermissionError("Administrator privileges required for packet capture")
-            
         self.interface = self._get_interface_name(interface)
         self.running = False
         self.capture_thread: Optional[threading.Thread] = None
-        
-        # Initialize both databases
-        self.db_handler = DatabaseHandler()
+
+        # Initialize MongoDB only
         try:
             self.mongo_handler = MongoDBHandler()
-            self.use_mongo = True
-            self.logger.info("Using MongoDB for primary storage")
+            self.logger.info("MongoDB connection established")
         except Exception as e:
-            self.logger.warning(f"MongoDB not available, falling back to SQLite: {e}")
-            self.use_mongo = False
-            
-        self.ntlm_sessions = {}  # Track NTLM sessions
+            self.logger.error(f"Failed to connect to MongoDB: {e}")
+            raise
 
-    def _is_admin(self) -> bool:
-        try:
-            if platform.system() == 'Windows':
-                return ctypes.windll.shell32.IsUserAnAdmin()
-            else:
-                return os.geteuid() == 0
-        except:
-            return False
+        self.ntlm_sessions = {}  # Track NTLM sessions
 
     def _get_interface_name(self, interface: str) -> str:
         """Get the correct interface name for the current platform"""
@@ -100,8 +78,6 @@ class PacketSniffer:
         self.running = False
         if self.capture_thread:
             self.capture_thread.join()
-        if self.db_handler:
-            self.db_handler.disconnect()
         if hasattr(self, 'mongo_handler') and self.mongo_handler:
             self.mongo_handler.disconnect()
         self.logger.info("Packet capture stopped")
@@ -129,7 +105,7 @@ class PacketSniffer:
                 # Check for both TCP and UDP packets
                 if (TCP in packet or UDP in packet) and hasattr(packet.payload.payload, 'load'):
                     payload_data = bytes(packet.payload.payload.load)
-                    
+
                     # Look for NTLM authentication packets
                     if self._is_ntlm_auth(packet):
                         ntlm_data = self._extract_ntlm_data(packet)
@@ -140,7 +116,7 @@ class PacketSniffer:
                                 if hash_info.get('complete_hash'):
                                     self._store_hash(hash_info)
                                     self.logger.info(f"Captured NTLM hash from {packet[IP].src} -> {packet[IP].dst}")
-                                
+
                                 # Enhanced logging for authentication attempts
                                 msg_type = hash_info.get('type')
                                 if msg_type == 1:
@@ -156,7 +132,7 @@ class PacketSniffer:
                                     if hash_info.get('hostname'):
                                         self.logger.info(f"    Hostname: {hash_info['hostname']}")
                                     self.logger.info("-" * 50)
-                            
+
                             return ntlm_data
             except Exception as e:
                 self.logger.error(f"Error processing packet: {e}")
@@ -166,7 +142,7 @@ class PacketSniffer:
         """Store captured hash information in database"""
         try:
             # Try MongoDB first if available
-            if self.use_mongo:
+            if hasattr(self, 'mongo_handler') and self.mongo_handler:
                 try:
                     capture_id = self.mongo_handler.store_capture({
                         'source': hash_info['source'],
@@ -181,29 +157,8 @@ class PacketSniffer:
                         self.logger.info("Successfully stored capture in MongoDB")
                         return
                 except Exception as e:
-                    self.logger.error(f"MongoDB storage failed, falling back to SQLite: {e}")
-            
-            # Fallback to SQLite
-            if not self.db_handler.is_connected():
-                self.db_handler.connect()
+                    self.logger.error(f"MongoDB storage failed: {e}")
 
-            plugin_data = {
-                'nom_plugin': 'NTLM Capture',
-                'description': f'Captured from {hash_info["source"]}',
-                'version': '1.0',
-                'ntlm_key': hash_info['payload']
-            }
-            
-            plugin_id = self.db_handler.store_plugin(**plugin_data)
-            
-            if plugin_id and hash_info.get('username'):
-                result_data = {
-                    'id_plugin': plugin_id,
-                    'status': 'SUCCESS',
-                    'details': f'Captured credentials - User: {hash_info["username"]}, Domain: {hash_info.get("domain", "N/A")}'
-                }
-                self.db_handler.store_result(**result_data)
-                
         except Exception as e:
             self.logger.error(f"Error storing hash: {e}")
 
@@ -216,8 +171,8 @@ class PacketSniffer:
                 payload = bytes(packet[UDP].payload)
             else:
                 return False
-                
-            return (b'NTLMSSP' in payload and 
+
+            return (b'NTLMSSP' in payload and
                    (b'NTLMSSP\x00\x01\x00\x00\x00' in payload or  # Type 1
                     b'NTLMSSP\x00\x02\x00\x00\x00' in payload or  # Type 2
                     b'NTLMSSP\x00\x03\x00\x00\x00' in payload))   # Type 3
@@ -233,7 +188,7 @@ class PacketSniffer:
                 payload = bytes(packet[UDP].payload)
             else:
                 return None
-                
+
             if b'NTLMSSP' in payload:
                 return {
                     'source': packet[IP].src,
@@ -243,6 +198,7 @@ class PacketSniffer:
         except Exception as e:
             self.logger.error(f"Error extracting NTLM data: {e}")
         return None
+
 
 def start_capture(interface: str = None) -> PacketSniffer:
     """Start packet capture and return the sniffer instance"""
