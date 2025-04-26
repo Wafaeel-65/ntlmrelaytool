@@ -17,7 +17,7 @@ NTLM Relay Tool is a framework for capturing NTLM authentication attempts on net
 ## Installation
 
 ```bash
-git clone https://github.com/your_org/ntlmrelaytool.git
+git clone https://github.com/Wafaeel-65/ntlmrelaytool.git
 cd ntlmrelaytool
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
