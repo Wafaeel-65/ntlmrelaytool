@@ -247,8 +247,10 @@ class SMBServer(ThreadingMixIn, TCPServer):
 class LLMNRRequestHandler(BaseRequestHandler):
     def handle(self):
         """Handle LLMNR query and send poisoned response"""
+        self.server.responder.logger.debug(f"LLMNRRequestHandler: Received data from {self.client_address}")
         try:
             data, sock = self.request
+            self.server.responder.logger.debug(f"LLMNRRequestHandler: Data length: {len(data)}")
             
             if data[2:4] == b'\x00\x00':  # Query packet
                 # Get query details
@@ -283,8 +285,10 @@ class LLMNRRequestHandler(BaseRequestHandler):
 class NBTNSRequestHandler(BaseRequestHandler):
     def handle(self):
         """Handle NBT-NS query and send poisoned response"""
+        self.server.responder.logger.debug(f"NBTNSRequestHandler: Received data from {self.client_address}")
         try:
             data, sock = self.request
+            self.server.responder.logger.debug(f"NBTNSRequestHandler: Data length: {len(data)}")
             
             if data[2:4] == b'\x01\x10':  # Name query packet
                 # Get query details
@@ -318,8 +322,10 @@ class NBTNSRequestHandler(BaseRequestHandler):
 class MDNSRequestHandler(BaseRequestHandler):
     def handle(self):
         """Handle MDNS query and send poisoned response"""
+        self.server.responder.logger.debug(f"MDNSRequestHandler: Received data from {self.client_address}")
         try:
             data, sock = self.request
+            self.server.responder.logger.debug(f"MDNSRequestHandler: Data length: {len(data)}")
             
             if data[2:4] == b'\x00\x00':  # Query packet
                 # Get query details
