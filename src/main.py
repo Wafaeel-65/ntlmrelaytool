@@ -171,6 +171,16 @@ def main():
                 relay = Relay(interface=args.interface)
                 relay.set_target(args.target)
                 relay.start_relay()
+                logger.info("Relay server started. Press Ctrl+C to stop.")
+                
+                # Keep the main thread running
+                try:
+                    while True:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    logger.info("Stopping relay server...")
+                    relay.stop_relay()
+                    
             except Exception as e:
                 logger.error(f"Failed to start relay: {str(e)}")
                 
