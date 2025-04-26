@@ -1,4 +1,6 @@
-from typing import Tuple, Dict
+import struct
+import base64
+from typing import Tuple, Dict, List
 from passlib.hash import nthash
 
 def process_ntlm_hash(hash_data: Dict) -> Tuple[str, str, str]:
@@ -73,3 +75,90 @@ def _is_valid_ntlm_hash(hash_value: str) -> bool:
         return True
     except ValueError:
         return False
+
+def parse_hashes(ntlm_data: Dict) -> List[Dict]:
+    """
+    Parse NTLM authentication data and extract hash information.
+    
+    Args:
+        ntlm_data (Dict): Dictionary containing source, destination and payload data
+            Expected format: {
+                'source': str,
+                'destination': str,
+                'payload': str (hex encoded)
+            }
+    
+    Returns:
+        List[Dict]: List of parsed NTLM messages with their details
+    """
+    results = []
+    try:
+        payload = bytes.fromhex(ntlm_data['payload'])
+        
+        # Find NTLMSSP signature
+        offset = payload.find(b'NTLMSSP\x00')
+        if offset == -1:
+            return results
+
+        # Get message type
+        msg_type = struct.unpack("<I", payload[offset+8:offset+12])[0]
+        
+        base_result = {
+            'type': msg_type,
+            'source': ntlm_data['source'],
+            'destination': ntlm_data['destination']
+        }
+
+        if msg_type == 1:  # Negotiate
+            results.append({**base_result, 'details': 'NTLM Negotiate Message'})
+            
+        elif msg_type == 2:  # Challenge
+            results.append({**base_result, 'details': 'NTLM Challenge Message'})
+            
+        elif msg_type == 3:  # Authenticate
+            # Extract lengths and offsets
+            lm_len, lm_off = struct.unpack("<HI", payload[offset+16:offset+22])
+            ntlm_len, ntlm_off = struct.unpack("<HI", payload[offset+24:offset+30])
+            domain_len, domain_off = struct.unpack("<HI", payload[offset+28:offset+34])
+            user_len, user_off = struct.unpack("<HI", payload[offset+36:offset+42])
+            host_len, host_off = struct.unpack("<HI", payload[offset+44:offset+50])
+            
+            # Extract values
+            if domain_len > 0:
+                domain = payload[domain_off:domain_off+domain_len].decode('utf-16-le')
+            else:
+                domain = ''
+                
+            if user_len > 0:
+                username = payload[user_off:user_off+user_len].decode('utf-16-le')
+            else:
+                username = ''
+                
+            if host_len > 0:
+                hostname = payload[host_off:host_off+host_len].decode('utf-16-le')
+            else:
+                hostname = ''
+                
+            # Extract NTLM hash if present
+            ntlm_hash = ''
+            if ntlm_len > 0:
+                ntlm_hash = payload[ntlm_off:ntlm_off+ntlm_len].hex()
+            
+            results.append({
+                **base_result,
+                'username': username,
+                'domain': domain,
+                'hostname': hostname,
+                'ntlm_hash': ntlm_hash,
+                'complete_hash': bool(ntlm_hash),
+                'details': 'NTLM Authentication Message'
+            })
+            
+    except Exception as e:
+        results.append({
+            'type': 0,
+            'error': str(e),
+            'details': 'Error parsing NTLM data'
+        })
+        
+    return results
