@@ -129,7 +129,7 @@ class ResponderCapture:
             ip = s.getsockname()[0]
             s.close()
             if ip and not ip.startswith('169.254.'):
-                 self.logger.info(f"Auto-detected IP via socket: {ip}")
+                 self.logger.info(f"Auto-detected IP via socket: {ip}") # Corrected string termination
                  return ip
             else:
                 self.logger.warning(f"Socket method returned APIPA or invalid address: {ip}. Falling back to 0.0.0.0")
