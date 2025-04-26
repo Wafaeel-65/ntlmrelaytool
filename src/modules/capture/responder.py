@@ -232,14 +232,13 @@ class ResponderCapture:
         """Handle poisoned requests and store them"""
         try:
             self.logger.info(f"Received {request_type} request from {source_ip} for name {request_name}")
-            capture_info = {
-                'nom_plugin': f'{request_type} Poison',
-                'description': f'Poisoned {request_type} request from {source_ip} for name {request_name}',
-                'version': '1.0',
-                'source_ip': source_ip,
-                'request_name': request_name
-            }
-            plugin_id = self.db_handler.store_plugin(**capture_info)
+            plugin_id = self.db_handler.store_plugin(
+                nom_plugin=f'{request_type} Poison',
+                description=f'Poisoned {request_type} request for name {request_name}',
+                version='1.0',
+                source_ip=source_ip,
+                request_name=request_name
+            )
             
             if plugin_id:
                 result_data = {

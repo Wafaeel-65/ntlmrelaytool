@@ -167,7 +167,7 @@ class DatabaseHandler:
         except sqlite3.Error as e:
             raise Exception(f"Failed to get user plugins: {e}")
 
-    def store_plugin(self, nom_plugin, description, version, ntlm_key):
+    def store_plugin(self, nom_plugin, description, version, ntlm_key=None, source_ip=None, request_name=None):
         """Store plugin data with automatic reconnection"""
         try:
             if not self.test_connection():
@@ -175,9 +175,9 @@ class DatabaseHandler:
                     raise Exception("Could not establish database connection")
                     
             query = """INSERT INTO PLUGIN 
-                      (NOM_PLUGIN, DATE_CREATION, DESCRIPTION, VERSION, NTLM_KEY) 
-                      VALUES (?, ?, ?, ?, ?)"""
-            values = (nom_plugin, datetime.now(), description, version, ntlm_key)
+                      (NOM_PLUGIN, DATE_CREATION, DESCRIPTION, VERSION, NTLM_KEY, SOURCE_IP, REQUEST_NAME) 
+                      VALUES (?, ?, ?, ?, ?, ?, ?)"""
+            values = (nom_plugin, datetime.now(), description, version, ntlm_key, source_ip, request_name)
             self.cursor.execute(query, values)
             self.connection.commit()
             return self.cursor.lastrowid

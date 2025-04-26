@@ -30,11 +30,13 @@ class Credential:
         self.created_at = datetime.now()
 
 class Plugin:
-    def __init__(self, nom_plugin: str, description: str, version: str, ntlm_key: str):
+    def __init__(self, nom_plugin: str, description: str, version: str, ntlm_key: str = None, source_ip: str = None, request_name: str = None):
         self.nom_plugin = nom_plugin
         self.description = description
         self.version = version
         self.ntlm_key = ntlm_key
+        self.source_ip = source_ip
+        self.request_name = request_name
         self.date_creation = datetime.now()
 
 class Utilisateur:
