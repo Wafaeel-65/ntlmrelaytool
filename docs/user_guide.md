@@ -1,61 +1,74 @@
 # User Guide for NTLM Relay Tool
 
 ## Introduction
-The NTLM Relay Tool is designed to capture NTLM authentication requests, store the captured hashes, and exploit them through relay attacks or password cracking. This guide provides instructions on how to use the tool effectively.
+The NTLM Relay Tool captures NTLM authentication requests, relays them to target services, optionally cracks hashes, and stores results in MongoDB.
 
-## Installation
+## Requirements and Installation
 1. Clone the repository:
-   ```
-   git clone https://github.com/yourusername/ntlm-relay-tool.git
-   ```
-2. Navigate to the project directory:
-   ```
-   cd ntlm-relay-tool
-   ```
-3. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+   ```bash
+git clone https://github.com/your_org/ntlmrelaytool.git
+cd ntlmrelaytool
+```  
+2. Create and activate a virtual environment:
+   ```bash
+python -m venv venv
+# On Windows:
+venv\Scripts\activate
+# On Linux/macOS:
+source venv/bin/activate
+```  
+3. Install dependencies:
+   ```bash
+pip install -r requirements.txt
+```
 
 ## Configuration
-Before running the tool, ensure that the configuration files are set up correctly:
-- **Database Configuration**: Edit `config/database.ini` to set your database connection parameters.
-- **Logging Configuration**: Adjust `config/logging.ini` to configure logging settings.
+Copy and edit the following files in the `config/` directory:
+
+- `logging.ini`: Configure logging levels and handlers.
+- `mongodb.ini`: Set MongoDB `uri`, `database`, and collection names.
 
 ## Usage
-### Starting the Capture
-To begin capturing NTLM authentication requests, run the following command:
-```
-python src/main.py capture
-```
-This will start the Responder module, which listens for NTLM requests.
 
-### Stopping the Capture
-To stop the capture process, you can use the following command:
-```
-python src/main.py stop_capture
+### Listing Network Interfaces
+Use the provided script to list available network interfaces:
+```bash
+python scripts/list_interfaces.py
 ```
 
-### Exploiting Captured Hashes
-Once you have captured NTLM hashes, you can exploit them using the relay functionality:
+### Responder (Poison) Mode
+Start capturing and poisoning NTLM negotiations:
+```bash
+python src/main.py poison --interface <interface_name>
 ```
-python src/main.py relay
+Press Ctrl+C to stop.
+
+### Relay Mode
+Relay captured NTLM authentication to a target service:
+```bash
+python src/main.py relay --interface <interface_name> --target <target_address>
+```
+Example target formats:
+- SMB: `smb://10.0.0.5`
+- HTTP: `http://example.com`
+
+### Listing Captured Results
+Display stored authentication events and hashes from MongoDB:
+```bash
+python src/main.py list
 ```
 
-### Cracking Passwords
-To attempt to crack the captured hashes, use the following command:
-```
-python src/main.py crack
-```
-Make sure to provide a wordlist located in the `data/wordlists` directory.
+## Additional Scripts
+- `scripts/setup_db.py`: Initialize MongoDB collections.
+- `scripts/setup_mongodb.py`: Launch a local MongoDB instance (Docker).
+- `scripts/cleanup.py`: Remove logs and temporary data.
 
 ## Logging
-The tool logs its activities. Check the logs for any errors or important information regarding the operations performed.
+All tool output is logged to `ntlm_relay.log` and to console. Adjust `config/logging.ini` for verbosity and log destinations.
 
 ## Troubleshooting
-- Ensure that all dependencies are installed.
-- Check the configuration files for correct settings.
-- Review the logs for any error messages.
+- Ensure you run commands with administrator/root privileges.
+- Confirm dependencies are installed and config files are correct.
+- Review `ntlm_relay.log` and `app.log` for errors.
 
-## Conclusion
-This user guide provides a basic overview of how to operate the NTLM Relay Tool. For more detailed technical information, refer to the `docs/technical.md` file.
+For further details, see the Technical Documentation in `docs/technical.md` and the project README.

@@ -1,91 +1,65 @@
-# ntlm-relay-tool/README.md
-
 # NTLM Relay Tool
 
-## Overview
-
-The NTLM Relay Tool is a modular application designed to capture NTLM hashes, store them securely, and exploit them through NTLM relay attacks and password cracking. This tool is intended for security professionals and researchers to analyze NTLM authentication vulnerabilities.
+NTLM Relay Tool is a framework for capturing NTLM authentication attempts on network interfaces and relaying them to target services. It supports parsing, responding, cracking, relaying NTLM authentication, and storing results in MongoDB.
 
 ## Features
+- Packet capture and parsing of NTLM authentication
+- NTLM authentication relaying to SMB, LDAP, HTTP endpoints
+- Hash handling and optional cracking
+- MongoDB storage for authentication events and results
+- Extensible modules and utilities
 
-- **Capture Module**: Captures NTLM authentication requests using the Responder tool.
-- **Storage Module**: Manages the storage of captured hashes and related data in a database.
-- **Exploit Module**: Facilitates NTLM relay attacks and password cracking using captured hashes.
+## Requirements
+- Python 3.11+
+- MongoDB instance (for storage)
+- libpcap-compatible packet capture (e.g., WinPcap/Npcap on Windows)
 
-## Dependencies
+## Installation
 
-The NTLM Relay Tool requires the following dependencies:
-
-- Python 3.6 or higher
-- MongoDB (for hash storage)
-- Impacket library (for reliable NTLM relay attacks)
-
-### Installing Dependencies
-
-Install required Python packages:
 ```bash
+git clone https://github.com/your_org/ntlmrelaytool.git
+cd ntlmrelaytool
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Install Impacket (required for relay functionality):
-```bash
-pip install impacket
-# or on Kali Linux:
-apt update && apt install -y python3-impacket
-```
+## Configuration
+
+Copy `config/logging.ini` and `config/mongodb.ini` to your working directory and update settings as needed.
+
+- `logging.ini`: configure log levels and destinations
+- `mongodb.ini`: set `uri`, `database`, and `collection` names
 
 ## Usage
 
-### NTLM Capture
-
-To capture NTLM authentication attempts:
 ```bash
-python src/main.py capture --interface eth0
+python src/main.py --interface eth0 --target smb://10.0.0.5
 ```
 
-### NTLM Relay Attack
+Or use provided scripts:
 
-To perform an NTLM relay attack:
-```bash
-python src/main.py relay --target <target_ip>
-```
+- `scripts/list_interfaces.py`: List available network interfaces.
+- `scripts/setup_db.py`: Initialize MongoDB collections.
+- `scripts/setup_mongodb.py`: Start a local MongoDB instance (Docker).
+- `scripts/cleanup.py`: Clean captured data and logs.
 
-The relay mode leverages impacket-ntlmrelayx for reliable SMB protocol handling. After a successful relay, an interactive SMB shell will be available at localhost:11000. Connect to it using:
-```bash
-nc 127.0.0.1 11000
-```
+## Modules
 
-#### Common SMB Shell Commands
-
-Once connected to the SMB shell, you can use these commands:
-```
-help       - Show available commands
-shares     - List available shares on the target
-use <share>- Connect to a specific share (e.g., "use C$")
-ls         - List files in current directory
-cd <dir>   - Change directory
-get <file> - Download a file
-put <file> - Upload a file
-cat <file> - Display contents of a file
-```
-
-#### Ending a Relay Session
-
-To stop the relay:
-1. Press Ctrl+C in the terminal running the relay tool
-2. Close any active SMB shell sessions with `exit` command
+Detailed technical documentation can be found in `docs/technical.md`. For quick start, see the User Guide in `docs/user_guide.md`.
 
 ## Testing
 
-To run the unit tests, use:
+Run unit tests with pytest:
+
 ```bash
-pytest tests/
+pytest
 ```
 
 ## Contributing
 
-Contributions are welcome! Please submit a pull request or open an issue for any enhancements or bug fixes.
+Contributions welcome! Please open issues and pull requests.
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details.
+MIT License. See `LICENSE` for details.

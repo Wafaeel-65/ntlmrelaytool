@@ -1,76 +1,88 @@
-# Technical Documentation for NTLM Relay Tool
+# NTLM Relay Tool Technical Documentation
 
-## Overview
-The NTLM Relay Tool is designed to capture NTLM authentication requests, store the captured hashes securely, and exploit them through relay attacks and password cracking. This document provides a technical overview of the project's architecture, modules, and functionalities.
+## Architecture Overview
 
-## Project Structure
-The project is organized into several key directories and modules:
+The NTLM Relay Tool is organized into modular components:
 
-- **src/**: Contains the main application source code.
-  - **modules/**: Divided into three main sub-modules:
-    - **capture/**: Handles the capture of NTLM authentication requests.
-    - **storage/**: Manages the storage of captured data and database interactions.
-    - **exploit/**: Contains functionalities for exploiting captured hashes.
-  - **utils/**: Provides utility functions and classes, such as logging.
-  - **main.py**: The entry point of the application.
+1. **Capture Layer**  
+   - Listens on network interfaces and captures NTLM authentication traffic.  
+   - Parses raw packets to extract NTLM messages.
+2. **Responder Layer**  
+   - Crafts and sends NTLM challenge/response packets to clients.  
+   - Handles negotiation and authentication flows.
+3. **Exploit Layer**  
+   - Relays valid NTLM credentials to target services (SMB, LDAP, HTTP).  
+   - Optional cracking of captured hashes.
+4. **Storage Layer**  
+   - Persists events, credentials, and results into MongoDB.  
+   - Provides data models and database access abstraction.
+5. **Utility Layer**  
+   - Shared configuration, logging, hash processing, MongoDB connection, and packet sniffing.
 
-- **tests/**: Contains unit tests for each module to ensure functionality and reliability.
+## Module Details
 
-- **scripts/**: Includes scripts for database setup and cleanup operations.
+### capture
 
-- **config/**: Holds configuration files for database and logging settings.
+#### parser.py  
+- Implements packet parsing logic using scapy.  
+- Extracts NTLM messages (Type 1, 2, 3) from network traffic.
 
-- **data/**: Contains wordlists used for password cracking.
+#### responder.py  
+- Generates NTLM challenge messages.  
+- Responds to clients to progress through authentication flows.
 
-- **docs/**: Documentation files, including technical documentation and user guides.
+### exploit
 
-## Modules
+#### ntlmrelayserver.py  
+- Orchestrates relay attacks by accepting client auth and forwarding to targets.
 
-### Capture Module
-- **responder.py**: Implements the `Responder` class for capturing NTLM authentication requests.
-  - **Methods**:
-    - `start_capture()`: Begins listening for NTLM requests.
-    - `stop_capture()`: Stops the capture process.
+#### relay.py  
+- Handles protocol-specific relaying logic (SMB, LDAP, HTTP).  
+- Manages connection pooling and timeouts.
 
-- **parser.py**: Provides functions for parsing captured NTLM hashes.
-  - **Function**:
-    - `parse_hashes(raw_data)`: Takes raw data and returns structured hash information.
+#### cracker.py  
+- Optional hash cracking using external tools (e.g., hashcat).  
+- Configurable wordlists and rules.
 
-### Storage Module
-- **database.py**: Manages database connections and operations.
-  - **Class**: `Database`
-    - **Methods**:
-      - `connect()`: Establishes a connection to the database.
-      - `disconnect()`: Closes the database connection.
-      - `execute_query(query)`: Executes a given SQL query.
+### storage
 
-- **models.py**: Defines data models for the application.
-  - **Classes**:
-    - `Target`: Represents a target with properties like `id`, `username`, and `hash`.
-    - `Credential`: Represents credentials with similar properties.
+#### database.py  
+- Initializes MongoDB client and database/collection configurations.  
+- Provides CRUD operations for events and credentials.
 
-### Exploit Module
-- **relay.py**: Contains the `Relay` class for managing NTLM relay attacks.
-  - **Methods**:
-    - `start_relay()`: Initiates the relay attack.
-    - `stop_relay()`: Stops the relay process.
+#### models.py  
+- Defines data models for authentication events and hash results.  
+- Uses Pydantic or similar for schema validation.
 
-- **cracker.py**: Implements the `Cracker` class for password cracking.
-  - **Method**:
-    - `crack_hash(hash, wordlist)`: Attempts to find the original password for a given hash using a specified wordlist.
+### utils
 
-## Utilities
-- **logger.py**: Provides logging functionality.
-  - **Class**: `Logger`
-    - **Methods**:
-      - `log_info(message)`: Logs informational messages.
-      - `log_error(message)`: Logs error messages.
+#### config.py  
+- Loads `logging.ini` and `mongodb.ini`.  
+- Exposes application settings via typed objects.
 
-## Testing
-The project includes unit tests for each module to ensure that all functionalities work as expected. Tests are located in the `tests/` directory and cover the capture, storage, and exploit modules.
+#### logger.py  
+- Configures Python logging based on `logging.ini`.  
+- Supports console and file handlers.
 
-## Configuration
-Configuration files for the database and logging are located in the `config/` directory. These files allow for easy adjustments to settings without modifying the source code.
+#### hash_handler.py  
+- Processes NTLM hashes for storage and optional cracking.  
+- Handles formatting and salt extraction.
 
-## Conclusion
-The NTLM Relay Tool is a modular and extensible application designed for security professionals to analyze and exploit NTLM authentication vulnerabilities. This documentation provides a comprehensive overview of the project's structure and functionalities, facilitating further development and usage.
+#### mongo_handler.py  
+- Provides helper functions for MongoDB operations.  
+- Wraps exceptions and retry logic.
+
+#### packet_sniffer.py  
+- Abstracts pcap interface for capturing live traffic.  
+- Supports reading from pcap files for offline analysis.
+
+## Configuration Files
+
+- `config/logging.ini`: Logging levels and handlers.  
+- `config/mongodb.ini`: MongoDB `uri`, `database`, `collections`.
+
+## Extensibility
+
+- Add new relaying protocols by extending `exploit.relay`.  
+- Customize parsing or responder logic in the `capture` module.  
+- Plug in alternative storage backends by implementing storage interfaces.
