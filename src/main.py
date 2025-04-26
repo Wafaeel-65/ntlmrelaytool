@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import ctypes
+import time  # Add time import
 from datetime import datetime
 from scapy.all import get_if_list, conf
 import subprocess
@@ -53,59 +54,19 @@ def setup_logging():
 def list_results(mongo_handler, logger):
     """List captured results from MongoDB"""
     try:
-        logger.info("Querying MongoDB for captures...")
-        if mongo_handler:
-            try:
-                # Test MongoDB connection
-                mongo_handler.db.command('ping')
-                logger.debug("MongoDB connection test successful")
-                
-                # Get all captures
-                captures = mongo_handler.get_captures()
-                logger.debug(f"MongoDB query returned {len(captures)} captures")
-                
-                if captures:
-                    print("\nMongoDB Captures:")
-                    print("=" * 80)
-                    print(f"{'ID':<24} {'Timestamp':<25} {'Type':<10} {'Source IP':<15} {'Request Name'}")
-                    print("-" * 80)
-                    for capture in captures:
-                        id_str = str(capture.get('_id', 'N/A'))
-                        timestamp_val = capture.get('timestamp', 'N/A')
-                        timestamp_str = timestamp_val.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp_val, datetime) else str(timestamp_val)
-                        capture_type = capture.get('type', 'N/A')
-                        source = capture.get('source', 'N/A')
-                        request_name = capture.get('request_name', 'N/A')
-                        print(f"{id_str:<24} {timestamp_str:<25} {capture_type:<10} {source:<15} {request_name}")
-                    print("=" * 80)
-                else:
-                    logger.info("No captures found in MongoDB")
-                    
-                # Get results
-                results = mongo_handler.get_results()
-                if results:
-                    print("\nMongoDB Results:")
-                    print("=" * 80)
-                    print(f"{'ID':<24} {'Timestamp':<25} {'Status':<10} {'Details'}")
-                    print("-" * 80)
-                    for result in results:
-                        id_str = str(result.get('_id', 'N/A'))
-                        timestamp_val = result.get('timestamp', 'N/A')
-                        timestamp_str = timestamp_val.strftime('%Y-%m-%d %H:%M:%S') if isinstance(timestamp_val, datetime) else str(timestamp_val)
-                        status = result.get('status', 'N/A')
-                        details = result.get('details', 'N/A')
-                        print(f"{id_str:<24} {timestamp_str:<25} {status:<10} {details}")
-                    print("=" * 80)
-                else:
-                    logger.info("No results found in MongoDB")
-                    
-            except Exception as e:
-                logger.error(f"Error querying MongoDB: {e}", exc_info=True)
-        else:
-            logger.error("MongoDB handler not available")
-            
+        results = mongo_handler.get_captures()
+        if not results:
+            logger.info("No captures found in database")
+            return
+        
+        logger.info("\nCaptured Results:")
+        for result in results:
+            logger.info("-" * 50)
+            for key, value in result.items():
+                if key != '_id':
+                    logger.info(f"{key}: {value}")
     except Exception as e:
-        logger.error(f"Error in list_results: {e}", exc_info=True)
+        logger.error(f"Failed to list results: {str(e)}")
 
 def main():
     """Main entry point"""
@@ -144,7 +105,6 @@ def main():
                 logger.info(f"HTTP server running on port {responder.auth_ports['http']}")
                 logger.info(f"SMB server running on port {responder.auth_ports['smb']}")
                 while True:
-                    import time
                     time.sleep(1)
             except PermissionError:
                 logger.error("Permission denied. Try running with administrator privileges.")
@@ -183,6 +143,7 @@ def main():
                     
             except Exception as e:
                 logger.error(f"Failed to start relay: {str(e)}")
+                relay.stop_relay() if 'relay' in locals() else None
                 
         elif args.command == 'list':
             list_results(mongo_db, logger)
