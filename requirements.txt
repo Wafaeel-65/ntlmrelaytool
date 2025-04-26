@@ -13,5 +13,4 @@ pymongo==4.6.0
 dnspython==2.6.0
 motor==3.3.2  # Async MongoDB driver
 tinydb==4.8.0  # Embedded database for portable mode
-netifaces>=0.11.0  # For network interface handling
 dnslib>=0.9.23  # For DNS packet manipulation

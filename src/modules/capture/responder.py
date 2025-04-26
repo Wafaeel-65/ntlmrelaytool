@@ -3,22 +3,82 @@ import threading
 import logging
 import struct
 import dns.resolver
+import platform
+import subprocess
+import json
 from socketserver import ThreadingMixIn, UDPServer, TCPServer, BaseRequestHandler
 from src.utils.db_handler import DatabaseHandler
 from src.modules.storage.models import Plugin, Resultat
 
 class ResponderCapture:
     def __init__(self, interface="0.0.0.0", 
-                 poisoning_ports={'llmnr': 5355, 'nbt-ns': 137, 'mdns': 5353},
-                 auth_ports={'http': 80, 'smb': 445}):
-        self.interface = interface
+                 poisoning_ports={'llmnr': 5355, 'nbt-ns': 8137, 'mdns': 5353},
+                 auth_ports={'http': 8080, 'smb': 8445}):
+        self.logger = logging.getLogger(__name__)
         self.poisoning_ports = poisoning_ports
         self.auth_ports = auth_ports
         self.running = False
         self.servers = []
         self.db_handler = DatabaseHandler()
-        self.logger = logging.getLogger(__name__)
         
+        # Handle interface name resolution
+        self.interface = self._resolve_interface(interface)
+            
+    def _resolve_interface(self, interface):
+        """Resolve interface name to IP address, handling Windows interface names"""
+        if interface == "0.0.0.0":
+            return self._get_interface_ip()
+            
+        try:
+            if platform.system() == 'Windows':
+                # Get interfaces using PowerShell
+                cmd = 'powershell -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription,IPAddress | ConvertTo-Json"'
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    interfaces = json.loads(result.stdout)
+                    # Handle single interface case
+                    if isinstance(interfaces, dict):
+                        interfaces = [interfaces]
+                        
+                    # Try to match by name or description
+                    for iface in interfaces:
+                        if (interface.lower() in iface['Name'].lower() or 
+                            (iface['InterfaceDescription'] and interface.lower() in iface['InterfaceDescription'].lower())):
+                            # Get IP address for this interface
+                            ip_cmd = f'powershell -Command "(Get-NetIPAddress -InterfaceAlias \'{iface["Name"]}\' -AddressFamily IPv4).IPAddress"'
+                            ip_result = subprocess.run(ip_cmd, capture_output=True, text=True)
+                            if ip_result.returncode == 0 and ip_result.stdout.strip():
+                                ip = ip_result.stdout.strip()
+                                self.logger.info(f"Resolved interface {interface} to IP: {ip}")
+                                return ip
+                            
+            # For non-Windows or fallback
+            return interface
+            
+        except Exception as e:
+            self.logger.error(f"Error resolving interface: {e}")
+            return "0.0.0.0"
+
+    def _get_interface_ip(self):
+        """Get the first available non-loopback IP address"""
+        try:
+            if platform.system() == 'Windows':
+                # Use PowerShell to get the first active interface's IP
+                cmd = 'powershell -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike \'*Loopback*\' } | Select-Object -First 1 -ExpandProperty IPAddress"'
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            
+            # Fallback method for all platforms
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception as e:
+            self.logger.error(f"Failed to get interface IP: {e}")
+            return "0.0.0.0"
+
     def start_poisoning(self):
         """Start all poisoning and authentication servers"""
         try:
@@ -97,17 +157,7 @@ class ResponderCapture:
 
     def get_response_ip(self):
         """Get the IP address to use in poisoned responses"""
-        try:
-            if self.interface == "0.0.0.0":
-                # Get the first non-loopback IPv4 address
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                s.connect(("8.8.8.8", 80))
-                ip = s.getsockname()[0]
-                s.close()
-                return ip
-            return self.interface
-        except:
-            return self.interface
+        return self.interface
 
 class LLMNRPoisoner(ThreadingMixIn, UDPServer):
     def __init__(self, server_address, responder):
