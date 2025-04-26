@@ -114,6 +114,7 @@ def main():
     parser = argparse.ArgumentParser(description='NTLM Relay Tool')
     parser.add_argument('command', choices=['poison', 'relay', 'list'], help='Command to execute')
     parser.add_argument('--interface', help='Network interface to use')
+    parser.add_argument('--target', help='Target IP address for relay mode')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
 
@@ -160,11 +161,16 @@ def main():
                 logger.error("Interface is required for relay mode")
                 list_interfaces()
                 return
+            
+            if not args.target:
+                logger.error("Target IP is required for relay mode")
+                return
                 
-            logger.info(f"Starting NTLM relay on interface {args.interface}...")
+            logger.info(f"Starting NTLM relay on interface {args.interface} targeting {args.target}...")
             try:
                 relay = Relay(interface=args.interface)
-                relay.start()
+                relay.set_target(args.target)
+                relay.start_relay()
             except Exception as e:
                 logger.error(f"Failed to start relay: {str(e)}")
                 
