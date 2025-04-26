@@ -1,19 +1,22 @@
 import os
 import json
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from configparser import ConfigParser
-from pymongo import MongoClient
+from pymongo import MongoClient, errors
 from bson.objectid import ObjectId
 
 class MongoDBHandler:
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path: str = None, max_retries: int = 3, retry_delay: int = 2):
         self.logger = logging.getLogger(__name__)
         self.db = None
         self.captures = None
         self.plugins = None
         self.results = None
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         
         if not config_path:
             config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
@@ -41,26 +44,45 @@ class MongoDBHandler:
         }
 
     def connect(self) -> bool:
-        """Establish connection to MongoDB"""
-        try:
-            connection_string = f"mongodb://{self.config['host']}:{self.config['port']}"
-            if self.config['username'] and self.config['password']:
-                connection_string = f"mongodb://{self.config['username']}:{self.config['password']}@{self.config['host']}:{self.config['port']}"
-            
-            client = MongoClient(connection_string)
-            self.db = client[self.config['database']]
-            self.captures = self.db.captures
-            self.plugins = self.db.plugins
-            self.results = self.db.results
-            
-            # Test connection
-            client.server_info()
-            self.logger.info("Successfully connected to MongoDB")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to connect to MongoDB: {e}")
-            return False
+        """Establish connection to MongoDB with retry logic"""
+        retries = 0
+        while retries < self.max_retries:
+            try:
+                connection_string = f"mongodb://{self.config['host']}:{self.config['port']}"
+                if self.config['username'] and self.config['password']:
+                    connection_string = f"mongodb://{self.config['username']}:{self.config['password']}@{self.config['host']}:{self.config['port']}"
+                
+                client = MongoClient(connection_string, 
+                                   serverSelectionTimeoutMS=5000,
+                                   connectTimeoutMS=5000)
+                
+                # Test connection
+                client.server_info()
+                
+                self.db = client[self.config['database']]
+                self.captures = self.db.captures
+                self.plugins = self.db.plugins
+                self.results = self.db.results
+                
+                # Ensure indexes for better performance
+                self.captures.create_index([("timestamp", -1)])
+                self.captures.create_index([("source", 1)])
+                
+                self.logger.info("Successfully connected to MongoDB")
+                return True
+                
+            except errors.ServerSelectionTimeoutError:
+                retries += 1
+                if retries < self.max_retries:
+                    self.logger.warning(f"MongoDB connection attempt {retries} failed, retrying in {self.retry_delay} seconds...")
+                    time.sleep(self.retry_delay)
+                else:
+                    self.logger.error("Failed to connect to MongoDB after maximum retries")
+                    return False
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to connect to MongoDB: {e}")
+                return False
 
     def disconnect(self):
         """Close MongoDB connection"""
