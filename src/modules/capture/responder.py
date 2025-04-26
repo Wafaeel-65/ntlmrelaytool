@@ -6,6 +6,7 @@ import dns.resolver
 import platform
 import subprocess
 import json
+import psutil
 from socketserver import ThreadingMixIn, UDPServer, TCPServer, BaseRequestHandler
 from src.utils.db_handler import DatabaseHandler
 from src.modules.storage.models import Plugin, Resultat
@@ -25,58 +26,117 @@ class ResponderCapture:
         self.interface = self._resolve_interface(interface)
             
     def _resolve_interface(self, interface):
-        """Resolve interface name to IP address, handling Windows interface names"""
+        """Resolve interface name to IP address, handling different platforms"""
         if interface == "0.0.0.0":
-            return self._get_interface_ip()
-            
+            return self._get_interface_ip() # Use the auto-detect method
+
         try:
             if platform.system() == 'Windows':
-                # Get interfaces using PowerShell
-                cmd = 'powershell -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription,IPAddress | ConvertTo-Json"'
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode == 0:
-                    interfaces = json.loads(result.stdout)
-                    # Handle single interface case
-                    if isinstance(interfaces, dict):
-                        interfaces = [interfaces]
+                # Get interfaces using PowerShell - Corrected quotes around 'Up'
+                cmd = 'powershell -Command "Get-NetAdapter | Where-Object {$_.Status -eq \'Up\'} | Select-Object Name,InterfaceDescription | ConvertTo-Json"'
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                interfaces = json.loads(result.stdout)
+                if isinstance(interfaces, dict): interfaces = [interfaces]
                         
-                    # Try to match by name or description
-                    for iface in interfaces:
-                        if (interface.lower() in iface['Name'].lower() or 
-                            (iface['InterfaceDescription'] and interface.lower() in iface['InterfaceDescription'].lower())):
-                            # Get IP address for this interface
-                            ip_cmd = f'powershell -Command "(Get-NetIPAddress -InterfaceAlias \'{iface["Name"]}\' -AddressFamily IPv4).IPAddress"'
-                            ip_result = subprocess.run(ip_cmd, capture_output=True, text=True)
-                            if ip_result.returncode == 0 and ip_result.stdout.strip():
-                                ip = ip_result.stdout.strip()
-                                self.logger.info(f"Resolved interface {interface} to IP: {ip}")
+                # Try to match by name or description
+                for iface in interfaces:
+                    if (interface.lower() in iface['Name'].lower() or 
+                        (iface['InterfaceDescription'] and interface.lower() in iface['InterfaceDescription'].lower())):
+                        # Get IP address for this interface
+                        ip_cmd = f"powershell -Command \"(Get-NetIPAddress -InterfaceAlias '{iface['Name']}' -AddressFamily IPv4).IPAddress\""
+                        ip_result = subprocess.run(ip_cmd, capture_output=True, text=True)
+                        if ip_result.returncode == 0 and ip_result.stdout.strip():
+                            ips = ip_result.stdout.strip().split('\n')
+                            for ip in ips:
+                                ip = ip.strip()
+                                if ip and not ip.startswith('169.254.'): # Filter out APIPA
+                                    self.logger.info(f"Resolved interface '{interface}' to IP: {ip}")
+                                    return ip
+                            self.logger.warning(f"Could not find a non-APIPA IPv4 address for interface '{interface}'. Found: {ips}")
+                        else:
+                             self.logger.warning(f"Could not retrieve IP address for interface '{iface['Name']}'")
+                
+                self.logger.error(f"Could not resolve Windows interface name '{interface}' to a valid IP address.")
+                return "0.0.0.0" # Fallback
+
+            else: # Linux/macOS
+                addrs = psutil.net_if_addrs()
+                if interface in addrs:
+                    for addr in addrs[interface]:
+                        if addr.family == socket.AF_INET: # Found IPv4 address
+                            ip = addr.address
+                            if not ip.startswith('169.254.'): # Ignore APIPA
+                                self.logger.info(f"Resolved interface '{interface}' to IP: {ip}")
                                 return ip
-                            
-            # For non-Windows or fallback
-            return interface
-            
+                            else:
+                                self.logger.warning(f"Interface '{interface}' has APIPA address: {ip}. Skipping.")
+                    # If loop finishes without finding a suitable IP:
+                    self.logger.error(f"Could not find a suitable IPv4 address for interface '{interface}'. Falling back.")
+                    # return "0.0.0.0" # Fallback if only APIPA or no IPv4 found # <-- Changed Line
+                    return self._get_interface_ip() # Try auto-detect as fallback
+                else:
+                    self.logger.error(f"Interface '{interface}' not found by psutil. Falling back.")
+                    # Attempt to use the name directly as a last resort, might be an IP already
+                    # self.logger.warning(f"Attempting to use '{interface}' directly.") # <-- Removed Line
+                    # return interface # <-- Removed Line
+                    return self._get_interface_ip() # Try auto-detect as fallback
+
         except Exception as e:
-            self.logger.error(f"Error resolving interface: {e}")
-            return "0.0.0.0"
+            self.logger.error(f"Error resolving interface '{interface}': {e}")
+            return "0.0.0.0" # Fallback on any error
 
     def _get_interface_ip(self):
-        """Get the first available non-loopback IP address"""
+        """Get the first available non-loopback, non-APIPA IP address"""
         try:
             if platform.system() == 'Windows':
-                # Use PowerShell to get the first active interface's IP
-                cmd = 'powershell -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike \'*Loopback*\' } | Select-Object -First 1 -ExpandProperty IPAddress"'
+                # Use PowerShell to get the first active interface's IP - Corrected quotes around '*Loopback*' and '169.254.*'
+                cmd = 'powershell -Command "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike \'*Loopback*\' -and $_.IPAddress -notlike \'169.254.*\' } | Select-Object -First 1 -ExpandProperty IPAddress"'
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode == 0 and result.stdout.strip():
-                    return result.stdout.strip()
-            
-            # Fallback method for all platforms
+                    ip = result.stdout.strip()
+                    self.logger.info(f"Auto-detected non-APIPA IP: {ip}")
+                    return ip
+                else:
+                    self.logger.warning("Could not auto-detect a non-APIPA IP via PowerShell.")
+
+            else: # Linux/macOS using psutil
+                best_ip = None
+                interfaces = psutil.net_if_addrs()
+                for if_name, addrs in interfaces.items():
+                    if "loopback" in if_name.lower() or "lo" == if_name.lower():
+                        continue
+                    for addr in addrs:
+                        if addr.family == socket.AF_INET:
+                            ip = addr.address
+                            if not ip.startswith('169.254.'):
+                                self.logger.info(f"Auto-detected potential IP {ip} on interface {if_name}")
+                                # Prefer non-localhost IPs if possible
+                                if not ip.startswith('127.'):
+                                    return ip 
+                                if best_ip is None: # Store the first valid one found (might be 127.x)
+                                    best_ip = ip
+                if best_ip:
+                    self.logger.info(f"Using auto-detected IP: {best_ip}")
+                    return best_ip
+                self.logger.warning("Could not auto-detect a suitable IP via psutil.")
+
+
+            # Fallback method for all platforms if others fail
+            self.logger.info("Attempting fallback IP detection via socket connection...")
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8', 80))
+            s.settimeout(0.1) # Avoid long hangs
+            s.connect(('8.8.8.8', 80)) # Doesn't actually send data
             ip = s.getsockname()[0]
             s.close()
-            return ip
+            if ip and not ip.startswith('169.254.'):
+                 self.logger.info(f"Auto-detected IP via socket: {ip}")
+                 return ip
+            else:
+                self.logger.warning(f"Socket method returned APIPA or invalid address: {ip}. Falling back to 0.0.0.0")
+                return "0.0.0.0"
+
         except Exception as e:
-            self.logger.error(f"Failed to get interface IP: {e}")
+            self.logger.error(f"Failed to get interface IP: {e}. Falling back to 0.0.0.0")
             return "0.0.0.0"
 
     def start_poisoning(self):
