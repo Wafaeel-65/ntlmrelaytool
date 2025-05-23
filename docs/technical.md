@@ -1,88 +1,208 @@
-# NTLM Relay Tool Technical Documentation
+# NTLM Relay Tool – Technical Documentation
 
-## Architecture Overview
+## Table of Contents
+1. [Overview](#overview)  
+2. [Architecture](#architecture)  
+3. [Module Breakdown](#module-breakdown)  
+   3.1 [Capture Module](#capture-module)  
+   3.2 [Exploit Module](#exploit-module)  
+   3.3 [Storage Module](#storage-module)  
+   3.4 [Utilities](#utilities)  
+4. [Command-Line Interface](#command-line-interface)  
+5. [Configuration Files](#configuration-files)  
+6. [Logging](#logging)  
+7. [Database Schema](#database-schema)  
+8. [Testing](#testing)  
+9. [Extensibility & Hooks](#extensibility--hooks)  
 
-The NTLM Relay Tool is organized into modular components:
+---
 
-1. **Capture Layer**  
-   - Listens on network interfaces and captures NTLM authentication traffic.  
-   - Parses raw packets to extract NTLM messages.
-2. **Responder Layer**  
-   - Crafts and sends NTLM challenge/response packets to clients.  
-   - Handles negotiation and authentication flows.
-3. **Exploit Layer**  
-   - Relays valid NTLM credentials to target services (SMB, LDAP, HTTP).  
-   - Optional cracking of captured hashes.
-4. **Storage Layer**  
-   - Persists events, credentials, and results into MongoDB.  
-   - Provides data models and database access abstraction.
-5. **Utility Layer**  
-   - Shared configuration, logging, hash processing, MongoDB connection, and packet sniffing.
+## 1. Overview  
+This document describes the internal design and implementation details of the NTLM Relay Tool. It is intended for developers and maintainers who wish to understand, extend, or troubleshoot the codebase.
 
-## Module Details
+## 2. Architecture  
+```text
+    ┌─────────────────┐     ┌───────────────┐     ┌──────────────┐
+    │ Network Capture │──►  │  Parser       │──►  │  Relay       │
+    │ (Scapy / pcap)  │     │ (extract data)│     │ (SMB/LDAP/   │
+    │                 │     └───────────────┘     │  HTTP)       │
+    └─────────────────┘           │               └──────────────┘
+                                  ▼
+                             ┌─────────┐
+                             │ Storage │
+                             │ (Mongo) │
+                             └─────────┘
+```
 
-### capture
+- **Capture**: Listens on raw sockets, decodes LLMNR/NBT-NS/mDNS and SMB/HTTP packets.  
+- **Parser**: Identifies NTLM message types, extracts credentials and hashes.  
+- **Relay**: Implements protocol-specific negotiation (SMB, LDAP, HTTP).  
+- **Storage**: Persists events and results in MongoDB.  
 
-#### parser.py  
-- Implements packet parsing logic using scapy.  
-- Extracts NTLM messages (Type 1, 2, 3) from network traffic.
+## 3. Module Breakdown
 
-#### responder.py  
-- Generates NTLM challenge messages.  
-- Responds to clients to progress through authentication flows.
+### 3.1 Capture Module  
+**Location**: `src/modules/capture/`
 
-### exploit
+- **parser.py**  
+  - `class NTLMParser.extract_ntlm_info(payload)`  
+    • Detect NTLM signature, parse Type 1/2/3 messages  
+    • Extract `username`, `domain`, `challenge`, `response`  
+- **responder.py**  
+  - LLMNR/NBT-NS/mDNS poisoning listeners on UDP 137, 5355, 5353  
+  - Replies with attacker IP to force NTLM auth  
+- **packet_sniffer.py**  
+  - Uses Scapy’s `sniff()` with BPF filters  
+  - Callback dispatch to parser and responder  
 
-#### ntlmrelayserver.py  
-- Orchestrates relay attacks by accepting client auth and forwarding to targets.
+### 3.2 Exploit Module  
+**Location**: `src/modules/exploit/`
 
-#### relay.py  
-- Handles protocol-specific relaying logic (SMB, LDAP, HTTP).  
-- Manages connection pooling and timeouts.
+- **relay.py**  
+  - `class SMBRelayClient` & `LDAPRelayClient` & `HTTPRelayClient`  
+  - Flow: receive Type 1 → forward to target → relay Type 2 back → forward Type 3  
+- **ntlmrelayserver.py**  
+  - Implements SMB server endpoints for NTLM challenge/response  
+- **cracker.py**  
+  - Integrates Passlib/PyCryptodome  
+  - Supports wordlist, brute-force, hybrid attacks  
 
-#### cracker.py  
-- Optional hash cracking using external tools (e.g., hashcat).  
-- Configurable wordlists and rules.
+### 3.3 Storage Module  
+**Location**: `src/modules/storage/`
 
-### storage
+- **database.py**  
+  - Manages `MongoClient` pool, handles retries  
+- **models.py**  
+  - Defines Pydantic-style schemas for:
+    - `AuthenticationAttempt`
+    - `RelayResult`
+    - `CrackedCredential`
 
-#### database.py  
-- Initializes MongoDB client and database/collection configurations.  
-- Provides CRUD operations for events and credentials.
+### 3.4 Utilities  
+**Location**: `src/utils/`
 
-#### models.py  
-- Defines data models for authentication events and hash results.  
-- Uses Pydantic or similar for schema validation.
+- **config.py**  
+  - Loads `config/*.ini` via `ConfigParser`  
+  - Environment variable overrides  
+- **mongo_handler.py**  
+  - Wraps CRUD operations, index creation  
+- **hash_handler.py**  
+  - NTLM hash computation & verification  
+- **logger.py**  
+  - Configures Python `logging` module per `logging.ini`  
 
-### utils
+## 4. Command-Line Interface  
+**Entry Point**: `src/main.py` (uses `argparse`)
 
-#### config.py  
-- Loads `logging.ini` and `mongodb.ini`.  
-- Exposes application settings via typed objects.
+```bash
+usage: main.py <command> [options]
 
-#### logger.py  
-- Configures Python logging based on `logging.ini`.  
-- Supports console and file handlers.
+Commands:
+  poison   --interface IFACE [--protocols llmnr,nbtns,mdns] [--debug]
+  relay    --interface IFACE --target TARGET_URL        [--debug]
+  attack   --interface IFACE --target TARGET_URL [--crack wordlist] [--debug]
+  list     [--type auth|relay] [--status success|fail] [--format json|table]
+  report   [--format html|md] --output FILE
+  export   [--format json|csv] --output FILE [--filter ...]
+```
 
-#### hash_handler.py  
-- Processes NTLM hashes for storage and optional cracking.  
-- Handles formatting and salt extraction.
+Each subcommand instantiates the corresponding module classes and invokes high-level methods:
+- `Controller.poison()`
+- `Controller.relay()`
+- `Controller.attack()`
+- etc.
 
-#### mongo_handler.py  
-- Provides helper functions for MongoDB operations.  
-- Wraps exceptions and retry logic.
+## 5. Configuration Files  
+- **config/mongodb.ini**  
+  ```ini
+  [mongodb]
+  host = localhost
+  port = 27017
+  database = ntlm_relay
+  username =
+  password =
+  auth_source = admin
+  connection_timeout = 5000
+  retry_writes = true
+  ```
+- **config/logging.ini**  
+  ```ini
+  [loggers]
+  keys = root, capture, exploit, storage
 
-#### packet_sniffer.py  
-- Abstracts pcap interface for capturing live traffic.  
-- Supports reading from pcap files for offline analysis.
+  [handlers]
+  keys = consoleHandler, fileHandler
 
-## Configuration Files
+  [formatters]
+  keys = standard
 
-- `config/logging.ini`: Logging levels and handlers.  
-- `config/mongodb.ini`: MongoDB `uri`, `database`, `collections`.
+  [logger_root]
+  level = INFO
+  handlers = consoleHandler, fileHandler
 
-## Extensibility
+  [handler_fileHandler]
+  class = handlers.RotatingFileHandler
+  level = DEBUG
+  formatter = standard
+  args = ('app.log','a',10485760,5)
+  ```
 
-- Add new relaying protocols by extending `exploit.relay`.  
-- Customize parsing or responder logic in the `capture` module.  
-- Plug in alternative storage backends by implementing storage interfaces.
+## 6. Logging  
+- **Levels**: DEBUG, INFO, WARNING, ERROR  
+- **Handlers**: Console, Rotating file (`app.log`), Audit (`audit.log`)  
+- **Component-specific** logs via `"capture"`, `"exploit"`, `"storage"` loggers  
+
+## 7. Database Schema  
+
+**AuthenticationAttempt**  
+```jsonc
+{
+  "_id": ObjectId,
+  "timestamp": ISODate,
+  "src_ip": "192.168.1.50",
+  "username": "alice",
+  "domain": "CORP",
+  "ntlm_hash": "aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0",
+  "protocol": "SMB",
+  "status": "Captured"
+}
+```
+
+**RelayResult**  
+```jsonc
+{
+  "_id": ObjectId,
+  "auth_id": ObjectId,
+  "target": "192.168.1.100",
+  "protocol": "SMB",
+  "success": true,
+  "operations": ["list_shares"],
+  "error": null,
+  "timestamp": ISODate
+}
+```
+
+## 8. Testing  
+- **Unit tests** in `tests/unit/`  
+- **Integration tests** in `tests/integration/`  
+- **Performance tests** in `tests/performance/`  
+- Run all tests:
+  ```bash
+  pytest --cov=src --cov-report=term-missing
+  ```
+- Fixtures in `tests/fixtures/` (pcap files, JSON mocks)
+
+## 9. Extensibility & Hooks  
+- **Custom Responders**: Implement new poisoning protocols in `responder.py`  
+- **New Relay Targets**: Subclass `BaseRelayClient` in `exploit/relay.py`  
+- **Event Hooks**:  
+  ```python
+  from utils.logger import get_logger
+  logger = get_logger('capture')
+  logger.info("Custom hook called", extra={'hook': 'on_packet'})
+  ```
+- **Configuration**: Extend `config.ini` and handle in `config.py`
+
+---
+**Last Updated**: May 2025  
+**Review Status**: Technical Review Complete
