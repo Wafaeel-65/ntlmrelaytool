@@ -13,6 +13,9 @@ from datetime import datetime
 from scapy.all import get_if_list, conf
 import subprocess
 import threading # Add threading import
+import socket
+import ipaddress
+import platform
 
 # Add the project root directory to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -101,6 +104,98 @@ def run_relaying(relay, logger):
         logger.info("Stopping relay server...")
         relay.stop_relay()
 
+def validate_target(target, timeout=3):
+    """Validate that target is accessible on common relay ports"""
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Resolve hostname to IP if needed
+        try:
+            target_ip = socket.gethostbyname(target)
+            if target_ip != target:
+                logger.info(f"Resolved {target} to {target_ip}")
+        except socket.gaierror:
+            logger.error(f"Could not resolve hostname: {target}")
+            return False
+        
+        # Check common relay ports
+        ports_to_check = {
+            445: "SMB",
+            139: "NetBIOS-SSN", 
+            80: "HTTP",
+            443: "HTTPS",
+            389: "LDAP",
+            636: "LDAPS"
+        }
+        
+        accessible_ports = []
+        logger.info(f"Checking target accessibility: {target_ip}")
+        
+        for port, service in ports_to_check.items():
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex((target_ip, port))
+                sock.close()
+                
+                if result == 0:
+                    accessible_ports.append((port, service))
+                    logger.info(f"  ✓ {service} ({port}) - Accessible")
+                else:
+                    logger.debug(f"  ✗ {service} ({port}) - Not accessible")
+            except Exception as e:
+                logger.debug(f"  ✗ {service} ({port}) - Error: {e}")
+        
+        if not accessible_ports:
+            logger.error(f"Target {target_ip} has no accessible relay ports!")
+            logger.error("Common relay ports (445-SMB, 80-HTTP, 389-LDAP) are not reachable.")
+            logger.error("This target is not suitable for NTLM relay attacks.")
+            return False
+        
+        # Special check for SMB (most common relay target)
+        smb_accessible = any(port in [445, 139] for port, _ in accessible_ports)
+        if smb_accessible:
+            logger.info(f"✓ SMB service detected - Good relay target!")
+        else:
+            logger.warning("⚠ No SMB service detected. Limited relay options available.")
+        
+        logger.info(f"Target validation passed: {len(accessible_ports)} accessible services")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error validating target {target}: {e}")
+        return False
+
+def suggest_network_scan(interface):
+    """Suggest network scanning to find targets"""
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Try to determine network range from interface
+        if platform.system() == "Linux":
+            cmd = f"ip route | grep {interface}"
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if '/' in line and interface in line:
+                        # Extract network range
+                        parts = line.split()
+                        for part in parts:
+                            if '/' in part:
+                                try:
+                                    network = ipaddress.ip_network(part, strict=False)
+                                    logger.info(f"Detected network range: {network}")
+                                    logger.info(f"Try scanning for targets: python scripts/target_scanner.py {network}")
+                                    return
+                                except:
+                                    continue
+        
+        logger.info("To find potential targets, try:")
+        logger.info("  python scripts/target_scanner.py 192.168.1.0/24")
+        logger.info("  python scripts/target_scanner.py --single-host 192.168.1.100")
+        
+    except Exception as e:
+        logger.debug(f"Error suggesting network scan: {e}")
 
 def main():
     """Main entry point"""
@@ -152,13 +247,11 @@ def main():
                 logger.error("Permission denied. Try running with administrator privileges.")
                 return
             except KeyboardInterrupt:
-                logger.info("Stopping poisoning servers...")
-            except Exception as e:
+                logger.info("Stopping poisoning servers...")            except Exception as e:
                 logger.error(f"Failed to start poisoning: {str(e)}")
             finally:
-                 if responder:
+                if responder:
                     responder.stop_poisoning()
-
 
         elif args.command == 'relay':
             if not args.interface:
@@ -168,6 +261,14 @@ def main():
 
             if not args.target:
                 logger.error("Target IP is required for relay mode")
+                suggest_network_scan(args.interface)
+                return
+
+            # Validate target accessibility before starting relay
+            logger.info(f"Validating target {args.target}...")
+            if not validate_target(args.target):
+                logger.error("Target validation failed. Relay cannot be started.")
+                suggest_network_scan(args.interface)
                 return
 
             logger.info(f"Starting NTLM relay on interface {args.interface} targeting {args.target}...")
@@ -188,9 +289,7 @@ def main():
                 logger.error(f"Failed to start relay: {str(e)}")
             finally:
                 if relay:
-                    relay.stop_relay()
-
-        elif args.command == 'list':
+                    relay.stop_relay()        elif args.command == 'list':
             if not mongo_db:
                 logger.error("Cannot list results, MongoDB connection failed.")
                 return
@@ -203,11 +302,18 @@ def main():
                 return
             if not args.target:
                 logger.error("Target IP is required for attack mode")
+                suggest_network_scan(args.interface)
                 return
             if not mongo_db:
                 logger.error("Cannot start attack, MongoDB connection failed.")
                 return
 
+            # Validate target accessibility before starting attack
+            logger.info(f"Validating target {args.target}...")
+            if not validate_target(args.target):
+                logger.error("Target validation failed. Attack cannot be started.")
+                suggest_network_scan(args.interface)
+                return
 
             logger.info(f"Starting Attack mode: Poisoning on {args.interface} and Relaying to {args.target}...")
 
