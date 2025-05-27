@@ -1,21 +1,16 @@
 import warnings
-from cryptography.utils import CryptographyDeprecationWarning
-warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning, message='.*TripleDES.*')
-warnings.filterwarnings('ignore', category=CryptographyDeprecationWarning)
-
-import argparse
 import os
 import sys
-import logging
 import ctypes
-import time  # Add time import
-from datetime import datetime
-from scapy.all import get_if_list, conf
-import subprocess
-import threading # Add threading import
+import logging
+import threading
+import time
 import socket
-import ipaddress
 import platform
+import subprocess
+import ipaddress
+import argparse
+from scapy.arch import get_if_list
 
 # Add the project root directory to Python path
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -247,7 +242,8 @@ def main():
                 logger.error("Permission denied. Try running with administrator privileges.")
                 return
             except KeyboardInterrupt:
-                logger.info("Stopping poisoning servers...")            except Exception as e:
+                logger.info("Stopping poisoning servers...")
+            except Exception as e:
                 logger.error(f"Failed to start poisoning: {str(e)}")
             finally:
                 if responder:
@@ -277,19 +273,18 @@ def main():
                 relay.set_target(args.target)
                 relay.start_relay()
                 logger.info("Relay server started. Press Ctrl+C to stop.")
-
                 # Keep the main thread running
-                try:
-                    while True:
-                        time.sleep(1)
-                except KeyboardInterrupt:
-                    logger.info("Stopping relay server...")
-
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                logger.info("Stopping relay server...")
             except Exception as e:
                 logger.error(f"Failed to start relay: {str(e)}")
             finally:
                 if relay:
-                    relay.stop_relay()        elif args.command == 'list':
+                    relay.stop_relay()
+
+        elif args.command == 'list':
             if not mongo_db:
                 logger.error("Cannot list results, MongoDB connection failed.")
                 return
